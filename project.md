@@ -235,9 +235,10 @@ Index file optional: `runs/index.csv` with columns `run_id, experiment, status, 
 
 1. YAML config + sampler (safety + Stage 5 hardness).
 2. Build / freeze data (wrapped $\theta$, $\omega$, energy).
-3. Baseline establishment: lock size, $k$, LR, batch; write `runs/`.
-4. Run strategies 1–4 (floating budget / epochs).
-5. Eval: sin/cos MSE + $\omega$ MSE per stage on frozen test.
+3. Visualization on ground-truth data (apps, gifs, plots); stub hooks for surrogate + eval plots.
+4. Baseline establishment: lock size, $k$, LR, batch; write `runs/`.
+5. Run strategies 1–4 (floating budget / epochs).
+6. Eval: sin/cos MSE + $\omega$ MSE per stage on frozen test; feed existing viz/plot CLIs.
    - **Error-vs-$t$ (per stage):** for each stage's frozen test set, compute mean prediction error (same loss as train: sin/cos + $\omega$) as a function of $t$. Log curves + optional scalar summaries. This is the main time-resolved forgetting / degradation view.
    - **Forgetting:** compare error-vs-$t$ (and aggregate loss) on Stage 1 **after** later-stage / full training vs a Stage-1-only reference; rise = forgetting. Same check can be repeated for other early stages if useful.
 
@@ -252,21 +253,74 @@ Index file optional: `runs/index.csv` with columns `run_id, experiment, status, 
   - Save training / eval curves for the locked baseline (or store enough in `metrics.jsonl` / `summary.json` to rebuild them)
 - `results.csv`: per-stage sin/cos MSE + $\omega$ MSE + forgetting deltas + error-vs-$t$ summary for all 4 strategies
 - Per-run error-vs-$t$ curves (e.g. under `runs/<run_id>/` or rebuilt from logged arrays); one curve family per stage
-- Training curves plot (from `metrics.jsonl`)
-- Render simulated pendulum against one or more ANN surrogate solutions (loader feeds the app)
-- Simulation rendering should be able to save gifs from a set of initial conditions
-- Plots to describe difference over time between sim and ANN surrogate solutions
-  - Prefer $\sin\theta$, $\cos\theta$ so plots do not jump at $\pm\pi$
-  - Velocity, PE, KE
-  - Ability to sort / filter plots by stage
-  - Ability to produce animated plots with the app
+- Training curves plot (from `metrics.jsonl`; uses plot helpers from Step **4b**)
+- **Visualization (Step 4b, built before training):** interactive apps, gifs, time-series plots for ground-truth data; stage / split filters; sin/cos (not raw $\theta$), $\omega$, PE, KE
+  - **Wiring only after NNs exist:** sim vs ANN overlay in app, surrogate trajectories from checkpoint loader (Step 8), eval error-vs-$t$ and training curves fed from Step 10 exports. No second viz stack at the end of the pipeline.
 - Citations: `writeup/refs.bib`
 
 
 
 ## Build order
 
-simulator -> config yaml -> sampler (safe accept/reject) -> data -> baseline establishment -> models -> strategies -> checkpoint I/O + loader -> train loop -> eval -> run all 4
+Check off in GitHub or any Markdown preview that supports task lists (`- [ ]` / `- [x]`).
+
+- [x] **1. Simulator** — `double_pendulum/` RK4, $E=T+V$, wrap angles
+- [x] **2. Config YAML** — `configs/sampler.yaml`, `configs/models/*.yaml`
+- [x] **3. Sampler** — stage-aware accept/reject, reads sampler YAML
+- [x] **4. Data** — `.npz` pools, frozen test, val carve-out
+- [ ] **4b. Visualization** — apps, plots, gifs on data now; ANN/metrics wiring later ([Visualization](#visualization-step-4b))
+- [ ] **5. Baseline establishment** — lock width, depth, $k$, LR, batch; `runs/`
+- [ ] **6. Models** — shared MLP from model YAML
+- [ ] **7. Strategies** — baseline, curriculum, active, progressive hooks
+- [ ] **8. Checkpoint I/O + loader** — `best.pt` / `last.pt`, rebuild from config
+- [ ] **9. Train loop** — CLI, `metrics.jsonl`, run folders
+- [ ] **10. Eval** — frozen test, error-vs-$t$, forgetting, `results.csv` hooks
+- [ ] **11. Run all 4** — launch all strategies with shared locks
+
+Linear summary: simulator → config yaml → sampler → data → **viz (4b)** → baseline → models → strategies → checkpoint I/O → train → eval → run all 4; then **wire** loader + eval into existing viz.
+
+## Visualization (step 4b)
+
+Build-order step **4b** immediately after Step 4 (does not block Step 5). Delivers the full visualization surface area up front; later steps only **connect** data sources (checkpoints, `metrics.jsonl`, eval arrays), not new UIs.
+
+### Shared layer
+
+- `double_pendulum/viz.py`: `build_svg`, canvas constants, shared CSS (no NiceGUI). `app.py` imports this; stays the live slider sandbox.
+- `double_pendulum/plots.py` (or equivalent): time-series helpers (sin/cos, $\omega$, PE, KE, sim-vs-ref difference), stage/split filters, static export + gif writer from frame sequences.
+- **Trajectory source protocol:** small interface, e.g. `GroundTruthSource` (Step 4 reader) and `SurrogateSource` (stub/no-op until Step 8). Apps and plot CLIs accept a list of sources so ANN overlay is "add `SurrogateSource`" later.
+
+### Phase A (required before Step 5; uses frozen `.npz` only)
+
+- `app_data.py` (port `8766`): `data_root`, stage, split, traj index; play/pause/reset/trail; stored series vs re-integrate from IC; read-only IC meta ($g$, masses, energy drift).
+- Dataset reader API: `list_pools`, `open_pool`, `get_traj(i) -> TrajectoryView` with `initial_state()`, `frame_at(k)`.
+- Gifs / batch export from IC sets (CLI or app action) using ground-truth trajectories.
+- Time-series plots from stored trajectories; filter by stage (and split).
+
+### Phase B (interfaces in 4b; implementation wired in Step 8)
+
+- `SurrogateSource`: given $(t, \mathrm{IC}, m, g)$, return 6-D predictions over $t$ (same decode as training). Loader from **Checkpoints** section calls the model; viz only depends on the protocol.
+- App overlay: second pendulum trace or dual time-series (sim solid, ANN dashed) when a `run_id` / checkpoint is selected. UI control can be disabled until loader exists.
+
+### Phase C (plot entrypoints in 4b; data wired in Step 10)
+
+- Functions/CLIs that accept paths to `metrics.jsonl`, per-run error-vs-$t$ arrays, `summary.json`, and emit training curves + eval curves + optional `results.csv` figures. Step 10 writes the arrays; Step 10 does not own matplotlib/NiceGUI layout.
+
+### Done when (4b)
+
+- [x] `viz.py` extracted; `app.py` behavior unchanged
+- [x] `app_data.py` animates trajectories from a real pool; gifs export works for at least one IC batch
+- [x] Time-series plots (sin/cos, $\omega$, PE/KE) work on stored data with stage filter
+- [x] `SurrogateSource` protocol + stub documented; overlay UI present but optional/disabled without checkpoint
+- [x] Eval/training plot functions exist and run on tiny fixture files (empty or synthetic) without a trained net
+- [x] Focused tests: SVG smoke, reader wiring, one static plot golden or shape check
+
+### Later wiring (not new build-order steps)
+
+| After step | Connect |
+| --- | --- |
+| 8. Checkpoint I/O + loader | Implement `SurrogateSource` with rebuild + `load_state_dict`; enable overlay in app |
+| 10. Eval | Point Phase C CLIs at real `metrics.jsonl` / error-vs-$t$ exports |
+| 11. Run all 4 | Same plot CLIs over four `run_id`s for comparison figures |
 
 ## Agent scope
 
@@ -290,14 +344,14 @@ Agents build **one step of the build order at a time**. Human (or a thin orchest
 | 2. Config YAML | `configs/sampler.yaml`, `configs/models/*.yaml` keys used later | Invent new strategies; Future directions keys | Keys cover stages, safety, IC boxes, loss weights, seeds; loadable without code edits for those values |
 | 3. Sampler | Sampler module + tests; reads sampler YAML | MLP, train loop, rewriting frozen data layout mid-flight | `sample(stage, n, cfg)` accept/reject; Stage 1–5 rules; reject rate logged; no negative $g$; Stage 4/5 `pe_min` + Stage 5 mass gap |
 | 4. Data | Dataset builder / `.npz` writer+reader; docs of array keys | Changing loss; training strategies; deleting frozen test without explicit ask | Train/val/test pools for stages 1–5 on disk; test frozen; val carved from train; pointwise $(t,\mathrm{IC},m,g)\to$ 6-D target; full-res on disk ($k$ train-time only) |
+| 4b. Visualization | `double_pendulum/viz.py`, `plots.py`, `app.py` refactor, `app_data.py`, gif/time-series CLIs, `SurrogateSource` stub + overlay hooks; tests | Training the MLP; implementing checkpoint loader (Step 8); changing `.npz` schema without updating reader | **Visualization (step 4b)** Done when checklist |
 | 5. Baseline establishment | Baseline model YAML + short search script; `runs/` for baseline trials | Curriculum / active / progressive logic; unlocking knobs after lock | Document locked width, depth, $k$, LR, batch + winning `run_id`; pass bar = per-stage val $\le$ `stage_pass_mse` |
 | 6. Models | Shared MLP builder from model YAML (width / depth); unit shape tests | Strategy-specific data policies; eval plots | Rebuild from config; input/output dims match Setup; progressive can start at `depth_start` |
 | 7. Strategies | Baseline / curriculum / active / progressive **data or schedule hooks only** (one strategy per agent run preferred) | Other strategies; HNN; changing locked width / LR / batch / $k$ | Strategy matches Experiments table; Active uses ensemble std + $\lambda(t)$; Progressive grows depth only |
-| 8. Checkpoint I/O + loader | `runs/<run_id>/` layout; save/load `state_dict` dicts; optional `runs/index.csv` | Retrain logic; sampler changes | `best.pt` / `last.pt` policy; loader rebuilds from `config.yaml` then `load_state_dict`; `weights_only=True` path |
-| 9. Train loop | Train entrypoint; metrics.jsonl; early stopping / epoch budget floats | Redefining loss; regenerating frozen test; app UI | One CLI/path per model YAML; writes run folder; logs epochs, samples seen, val loss |
-| 10. Eval | Frozen-test metrics; error-vs-$t$; forgetting vs Stage-1 reference; `results.csv` hooks | Retraining; changing train data | Per-stage sin/cos+$\omega$ MSE; error-vs-$t$ curves saved or rebuildable; forgetting delta defined |
-| 11. Run all 4 | Launch scripts / docs to run strategies 1–4 with shared locks | Inventing 5th strategy; floating locked knobs | Four run folders + comparable `summary.json` / `results.csv` rows |
-| 12. App / plots (deliverables) | `app.py` + plot/gif helpers consuming the loader | Retrain; sampler redesign; Future directions | Overlay sim vs ANN; gifs from IC set; sin/cos (not raw $\theta$) plots; stage filter; PE/KE/$\omega$ |
+| 8. Checkpoint I/O + loader | `runs/<run_id>/` layout; save/load `state_dict` dicts; optional `runs/index.csv`; wire `SurrogateSource` in viz | Retrain logic; sampler changes; new viz apps | `best.pt` / `last.pt` policy; loader rebuilds from `config.yaml` then `load_state_dict`; `weights_only=True`; ANN overlay works in existing app when `run_id` set |
+| 9. Train loop | Train entrypoint; metrics.jsonl; early stopping / epoch budget floats | Redefining loss; regenerating frozen test; new plot/UI stack | One CLI/path per model YAML; writes run folder; logs epochs, samples seen, val loss |
+| 10. Eval | Frozen-test metrics; error-vs-$t$; forgetting vs Stage-1 reference; `results.csv` hooks; export paths consumed by 4b plot CLIs | Retraining; changing train data; new viz layout | Per-stage sin/cos+$\omega$ MSE; error-vs-$t$ curves saved or rebuildable; forgetting delta defined; Phase C plots render from those exports |
+| 11. Run all 4 | Launch scripts / docs to run strategies 1–4 with shared locks | Inventing 5th strategy; floating locked knobs | Four run folders + comparable `summary.json` / `results.csv` rows; comparison figures via existing 4b plot CLIs |
 
 ### Prompt contract (paste into each agent)
 

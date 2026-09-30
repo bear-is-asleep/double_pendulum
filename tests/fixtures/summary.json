@@ -1,0 +1,7 @@
+{
+  "per_stage_mse": {
+    "stage1": 0.04,
+    "stage2": 0.08,
+    "stage3": 0.12
+  }
+}

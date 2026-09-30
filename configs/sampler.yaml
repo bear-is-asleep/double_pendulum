@@ -21,9 +21,14 @@ omega_traj_max: 25.0     # rad/s, reject if exceeded during probe/full sim
 den_min: 1.0e-6          # fail-safe on EOM denominator
 energy_abs_tol: 0.05     # discard if max_t |E(t)-E(0)| exceeds this
 energy_rel_tol: 0.01     # or if max_t |E(t)-E(0)| / (|E(0)| + eps) exceeds this
+energy_eps: 1.0e-8       # eps in relative energy denominator
 probe_time: 1.0          # seconds of light sim before accept
-max_draw_attempts: 50    # per accepted sample
+max_draw_attempts: 50    # max reject retries per accepted trajectory row
 angle_wrap: "negpi_pi"   # negpi_pi | zero_two_pi
+# Optional: reject if mean |d(theta)/dt| from unwrap exceeds this (null = off)
+max_mean_unwrap_rate: null
+
+num_stages: 5
 
 # Fixed gravity for early stages
 g_stage1: 0.0

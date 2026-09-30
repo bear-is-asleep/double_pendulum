@@ -40,7 +40,7 @@ class PendulumState:
 
 
 def derivatives(y: NDArray[np.float64], p: PendulumParams) -> NDArray[np.float64]:
-  """Return dy/dt for state y = [θ1, θ2, ω1, ω2]."""
+  """Return dy/dt for state y = [theta1, theta2, omega1, omega2]."""
   theta1, theta2, omega1, omega2 = y
   m1, m2, l1, l2, g = p.m1, p.m2, p.l1, p.l2, p.g
 

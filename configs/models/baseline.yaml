@@ -1,0 +1,27 @@
+# Shared ANN defaults for strategy runs. Copy / override per variant.
+
+name: baseline_ann
+model_type: mlp
+
+# Architecture (locked later by baseline establishment)
+# Heads: sin/cos theta1, sin/cos theta2, omega1, omega2
+output_dim: 6
+hidden_width: 128
+hidden_depth: 3
+activation: tanh
+
+# Train
+lr: 0.001
+batch_size: 256
+subsample_stride_k: 4
+loss_weight_theta: 1.0
+loss_weight_omega: 0.25
+seed: 0
+max_epochs: 200
+early_stop_patience: 20
+val_fraction: 0.1
+# Placeholder: per-stage val loss bar for "clears stage" (tune later)
+stage_pass_mse: 0.01
+
+# Active unused here
+n_ensemble: 1

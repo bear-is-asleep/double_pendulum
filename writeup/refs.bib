@@ -1,0 +1,100 @@
+% References for double_pendulum2 training-strategy / physics-ML plan.
+% Keys use ASCII only.
+
+@misc{eichelsdoerfer2021physics,
+  title        = {Physics-enhanced Neural Networks in the Small Data Regime},
+  author       = {Eichelsd{\"o}rfer, Jonas and Kaltenbach, Sebastian and Koutsourelakis, Phaedon-Stelios},
+  year         = {2021},
+  eprint       = {2111.10329},
+  archivePrefix= {arXiv},
+  primaryClass = {stat.ML},
+  url          = {https://arxiv.org/abs/2111.10329},
+  note         = {HNN/CHNN with energy-level regularization; single and double pendulum}
+}
+
+@misc{lu2022modlanets,
+  title        = {ModLaNets: Learning Generalisable Dynamics via Modularity and Physical Inductive Bias},
+  author       = {Lu, Yupu and Lin, Shijie and Chen, Guanqi and Pan, Jia},
+  year         = {2022},
+  eprint       = {2206.12325},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.LG},
+  url          = {https://arxiv.org/abs/2206.12325},
+  note         = {Modular Lagrangian nets; data-efficiency on double pendulum / n-body}
+}
+
+@misc{yazici2025pedagogical,
+  title        = {A Pedagogical Framework for Physics-Informed Machine Learning: From Classical Pendulum to Quantum Anharmonic Oscillator Using PyTorch on Modern GPU Hardware},
+  author       = {Yazici, Enis},
+  year         = {2025},
+  eprint       = {2502.05621},
+  archivePrefix= {arXiv},
+  primaryClass = {quant-ph},
+  url          = {https://arxiv.org/abs/2502.05621},
+  note         = {ANN vs PINN; learning curves; time-horizon curriculum for PINNs}
+}
+
+@misc{vejendla2025chaos,
+  title        = {Learning to Predict Chaos: Curriculum-Driven Training for Robust Forecasting of Chaotic Dynamics},
+  author       = {Vejendla, Harshil},
+  year         = {2025},
+  eprint       = {2510.04342},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.LG},
+  url          = {https://arxiv.org/abs/2510.04342},
+  note         = {Curriculum by Lyapunov / attractor dimension; valid prediction horizon}
+}
+
+@misc{greydanus2019hnn,
+  title        = {Hamiltonian Neural Networks},
+  author       = {Greydanus, Sam and Dzamba, Misko and Yosinski, Jason},
+  year         = {2019},
+  eprint       = {1906.01563},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.NE},
+  url          = {https://arxiv.org/abs/1906.01563},
+  note         = {Foundational HNN: learn H(q,p), dynamics from Hamilton equations}
+}
+
+@misc{cranmer2020lnn,
+  title        = {Lagrangian Neural Networks},
+  author       = {Cranmer, Miles and Greydanus, Sam and Hoyer, Stephan and Battaglia, Peter and Spergel, David and Ho, Shirley},
+  year         = {2020},
+  eprint       = {2003.04630},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.LG},
+  url          = {https://arxiv.org/abs/2003.04630},
+  note         = {Foundational LNN: learn L = T - U, dynamics from Euler--Lagrange}
+}
+
+@article{finzi2020chnn,
+  title   = {Simplifying Hamiltonian and Lagrangian Neural Networks via Explicit Constraints},
+  author  = {Finzi, Marc and Wang, Ke Alexander and Wilson, Andrew Gordon},
+  journal = {Advances in Neural Information Processing Systems},
+  year    = {2020},
+  eprint  = {2010.13581},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url     = {https://arxiv.org/abs/2010.13581},
+  note    = {CHNN/CLNN: Cartesian coords with explicit constraints}
+}
+
+@misc{pytorch_saving_models,
+  title        = {Saving and Loading Models},
+  author       = {{PyTorch Contributors}},
+  year         = {2024},
+  howpublished = {\url{https://pytorch.org/tutorials/beginner/saving_loading_models.html}},
+  note         = {Official guidance: prefer model.state\_dict; general checkpoint dict for resume/inference}
+}
+
+@misc{yang2020csl,
+  title        = {Arbitrary-Oriented Object Detection with Circular Smooth Label},
+  author       = {Yang, Xue and Yan, Junchi},
+  year         = {2020},
+  eprint       = {2003.05597},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.CV},
+  url          = {https://arxiv.org/abs/2003.05597},
+  note         = {Angle periodicity / discontinuous boundaries; circular smooth labels for angular prediction}
+}
+

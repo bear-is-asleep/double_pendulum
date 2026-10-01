@@ -11,7 +11,8 @@ Interactive Python simulation of a planar double pendulum. Dynamics use the Lagr
 
 Trained MLP surrogate (`small_v1`, stage 1) rolled out next to the stored physics trajectory:
 
-<video src="assets/small_v1_stage1.mp4" controls width="720"></video>
+<!-- GitHub README: repo paths and <video> tags do not inline-play. Edit this file on github.com, drag assets/small_v1_stage1.mp4 into the editor, paste the user-images URL on the next line, then remove the GIF. -->
+![Surrogate rollout demo](figures/gifs/small_v1_stage1_surrogate.gif)
 
 Full visualization guide (sources, CLIs, file formats): **[docs/visualization.md](docs/visualization.md)**.
 

@@ -5,7 +5,7 @@ Run ``python app.py`` and open http://localhost:8765.
 This app integrates the ODE on every animation tick. For trajectories loaded
 from ``data/*.npz`` pools, use ``app_data.py`` on port 8766 instead.
 
-Rendering and page styling live in ``double_pendulum/viz.py`` so both apps stay
+Rendering and page styling live in ``srcs/viz.py`` so both apps stay
 visually consistent. Overview: ``docs/visualization.md``.
 """
 
@@ -15,12 +15,12 @@ import math
 
 from nicegui import ui
 
-from double_pendulum.physics import (
+from srcs.physics import (
   DoublePendulum,
   PendulumParams,
   PendulumState,
 )
-from double_pendulum.viz import SHARED_HEAD_HTML, build_svg
+from srcs.visualization.viz import SHARED_HEAD_HTML, build_svg
 
 PORT = 8765
 

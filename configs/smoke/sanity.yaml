@@ -1,0 +1,23 @@
+# Baseline train smoke: ~5 minute sanity trial (pair with generate_smoke_data sanity).
+
+name: sanity
+data_root: data/baseline_small
+runs_root: runs/baseline_small
+run_id: baseline_w512_d2_k4_seed0_5m
+stages: [0, 1]
+
+data:
+  train_per_stage: 512
+  test_per_stage: 64
+  val_fraction: 0.2
+
+train:
+  model: baseline
+  device: null
+  max_epochs: 50
+  hidden_width: 64
+  hidden_depth: 2
+  subsample_stride_k: 4
+  early_stop_patience: 12
+  batch_size: 256
+  stage_pass_mse: 1.0e9

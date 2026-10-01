@@ -5,9 +5,9 @@ Batch helpers discover pools under a ``data_root`` via ``data.list_pools``.
 
 Command-line entry points (run from repo root)::
 
-  python -m double_pendulum.plots timeseries --data-root data --stage 1
-  python -m double_pendulum.plots gif --stage 1 --split test --indices 0
-  python -m double_pendulum.plots eval --metrics path/to/metrics.jsonl --out-dir figures/eval
+  python -m srcs.visualization.plots timeseries --data-root data --stage 1
+  python -m srcs.visualization.plots gif --stage 1 --split test --indices 0
+  python -m srcs.visualization.plots eval --metrics path/to/metrics.jsonl --out-dir figures/eval
 
 The ``eval`` subcommand renders training curves, error-vs-time, and per-stage
 summary bars from JSON/JSONL/NPZ files produced during training and evaluation.
@@ -32,10 +32,10 @@ import numpy as np
 from numpy.typing import NDArray
 from PIL import Image
 
-from double_pendulum.data import TrajectoryView, list_pools, open_pool
-from double_pendulum.physics import cartesian
-from double_pendulum.sources import GroundTruthSource, TrajectorySource
-from double_pendulum.viz import PendulumFrame, build_svg
+from srcs.simulation.data import TrajectoryView, list_pools, open_pool
+from srcs.physics import cartesian
+from srcs.visualization.sources import GroundTruthSource, TrajectorySource
+from srcs.visualization.viz import PendulumFrame, build_svg
 
 
 def energy_drift_scalar(energy: NDArray[np.float64]) -> float:
@@ -290,7 +290,7 @@ def plot_error_vs_t(
   NPZ layout:
     * ``t`` - shape ``(n_t,)``
     * ``error`` - shape ``(n_t,)`` for a single curve, or ``(n_stage, n_t)`` for one
-      curve per curriculum stage (row ``s`` corresponds to stage ``s + 1``).
+      curve per curriculum stage (row ``s`` corresponds to stage id ``s``, ids 0..6).
   """
   out = Path(out_path)
   out.parent.mkdir(parents=True, exist_ok=True)
@@ -304,15 +304,15 @@ def plot_error_vs_t(
     err = data["error"]
     if err.ndim == 2:
       if stage is not None:
-        # stage id 1..5 in row index stage-1
-        row = int(stage) - 1
+        # stage id 0..6 in row index stage (when error rows align with ids)
+        row = int(stage)
         if 0 <= row < err.shape[0]:
           ax.plot(t, err[row], label=f"stage {stage}")
         else:
-          ax.plot(t, err[0], label="stage 1 (fallback)")
+          ax.plot(t, err[0], label="stage 0 (fallback)")
       else:
         for i in range(err.shape[0]):
-          ax.plot(t, err[i], label=f"stage {i + 1}", alpha=0.85)
+          ax.plot(t, err[i], label=f"stage {i}", alpha=0.85)
     else:
       ax.plot(t, err, label="mean error")
     ax.set_xlabel("t (s)")
@@ -408,12 +408,21 @@ def _cli_timeseries() -> None:
 def _cli_run_plots() -> None:
   parser = argparse.ArgumentParser(description="Phase C training/eval figures")
   parser.add_argument("--metrics", type=Path, default=Path("tests/fixtures/metrics.jsonl"))
+  parser.add_argument("--val-key", default="val_loss", help="Val metric key in metrics.jsonl")
+  parser.add_argument("--train-key", default="train_loss", help="Train metric key in metrics.jsonl")
   parser.add_argument("--error-npz", type=Path, default=Path("tests/fixtures/error_vs_t.npz"))
   parser.add_argument("--summary", type=Path, default=Path("tests/fixtures/summary.json"))
   parser.add_argument("--out-dir", type=Path, default=Path("figures/eval"))
   args = parser.parse_args()
   args.out_dir.mkdir(parents=True, exist_ok=True)
-  print(plot_training_curves(args.metrics, args.out_dir / "training.png"))
+  print(
+    plot_training_curves(
+      args.metrics,
+      args.out_dir / "training.png",
+      val_key=args.val_key,
+      train_key=args.train_key,
+    )
+  )
   print(plot_error_vs_t(args.error_npz, args.out_dir / "error_vs_t.png"))
   print(plot_summary_stages(args.summary, args.out_dir / "summary_stages.png"))
 
@@ -422,7 +431,7 @@ if __name__ == "__main__":
   import sys
 
   if len(sys.argv) < 2:
-    print("usage: python -m double_pendulum.plots gif|timeseries|eval ...")
+    print("usage: python -m srcs.visualization.plots gif|timeseries|eval ...")
     raise SystemExit(2)
   cmd = sys.argv.pop(1)
   if cmd == "gif":

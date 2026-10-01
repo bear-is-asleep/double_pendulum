@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from configs.loader import list_model_configs, load_model_config, load_sampler_config
+from srcs.loader import (
+  list_model_configs,
+  list_smoke_presets,
+  load_model_config,
+  load_sampler_config,
+  load_smoke_preset,
+)
+from srcs.simulation.sampler import stage_id_bounds
 
 SAMPLER_REQUIRED = {
   "seed",
@@ -11,9 +18,9 @@ SAMPLER_REQUIRED = {
   "l",
   "g_min",
   "g_max",
+  "g_zero",
   "g_low",
   "g_high",
-  "g_stage1",
   "m_min",
   "m_equal",
   "omega0_max",
@@ -25,12 +32,15 @@ SAMPLER_REQUIRED = {
   "probe_time",
   "max_draw_attempts",
   "angle_wrap",
+  "stage_min",
   "num_stages",
+  "stage0",
   "stage1",
   "stage2",
   "stage3",
   "stage4",
   "stage5",
+  "stage6",
   "pools",
 }
 
@@ -61,11 +71,27 @@ def test_sampler_yaml_loads() -> None:
   cfg = load_sampler_config()
   missing = SAMPLER_REQUIRED - cfg.keys()
   assert not missing, f"sampler.yaml missing keys: {sorted(missing)}"
+  assert "g_stage1" not in cfg
+  lo, hi = stage_id_bounds(cfg)
+  assert lo == 0
+  assert hi == 6
   assert cfg["g_min"] >= 0
-  assert cfg["stage4"]["pe_min"] > 0
   assert cfg["stage5"]["pe_min"] > 0
-  assert cfg["stage5"]["mass_diff_min"] > 0
-  assert len(cfg["pools"]["train"]) == cfg["num_stages"]
+  assert cfg["stage6"]["pe_min"] > 0
+  assert cfg["stage6"]["mass_diff_min"] > 0
+  n_pools = hi - lo + 1
+  assert len(cfg["pools"]["train"]) == n_pools
+
+
+def test_smoke_presets_load() -> None:
+  names = list_smoke_presets()
+  assert "small" in names
+  assert "sanity" in names
+  for name in names:
+    preset = load_smoke_preset(name)
+    assert preset["name"] == name
+    assert preset["data"]["train_per_stage"] >= 1
+    assert preset["train"]["model"] == "baseline"
 
 
 def test_model_configs_merge() -> None:

@@ -10,7 +10,7 @@ dt: 0.0041666667  # 1/240
 # Fixed lengths
 l: 1.0
 
-# Global gravity band (stages 4 and 5 sample uniformly in [g_min, g_max])
+# Global gravity band (stages 5 and 6 sample uniformly in [g_min, g_max])
 g_min: 0.0
 g_max: 20.0
 
@@ -28,37 +28,47 @@ angle_wrap: "negpi_pi"   # negpi_pi | zero_two_pi
 # Optional: reject if mean |d(theta)/dt| from unwrap exceeds this (null = off)
 max_mean_unwrap_rate: null
 
-num_stages: 5
+# Curriculum stage ids are stage_min..num_stages (inclusive); seven stages: 0..6
+stage_min: 0
+num_stages: 6
 
-# Fixed gravity for early stages
-g_stage1: 0.0
-g_low: 2.0               # stage 2
-g_high: 9.81             # stage 3
+# Fixed gravity for early stages (stages 0–2 use g_zero for 0–1; stage 2 equal mass)
+g_zero: 0.0
+g_low: 2.0               # stage 3
+g_high: 9.81             # stage 4
 
-# Equal-mass stages (1-4)
+# Equal-mass stages (2–5 for both masses; stages 0–1 fix m2 = 0)
 m_equal: 1.0
 
 # IC boxes [min, max] in radians / rad/s
+stage0:
+  theta: [-3.14159, 3.14159]
+  omega: [-3.0, 3.0]
+
 stage1:
   theta: [-3.14159, 3.14159]
   omega: [-3.0, 3.0]
 
 stage2:
-  theta: [-0.6, 0.6]
-  omega: [-1.0, 1.0]
+  theta: [-3.14159, 3.14159]
+  omega: [-3.0, 3.0]
 
 stage3:
   theta: [-0.6, 0.6]
   omega: [-1.0, 1.0]
 
 stage4:
+  theta: [-0.6, 0.6]
+  omega: [-1.0, 1.0]
+
+stage5:
   theta: [-3.14159, 3.14159]
   omega: [-4.0, 4.0]
   # g ~ Unif[g_min, g_max]
   pe_min: 1.0              # |V0| lower bound; filters near-zero-g soft cases
 
-# Stage 5 free ranges + hardness filters
-stage5:
+# Stage 6 free ranges + hardness filters
+stage6:
   theta: [-3.14159, 3.14159]
   omega: [-4.0, 4.0]
   m: [0.3, 3.0]
@@ -66,7 +76,7 @@ stage5:
   pe_min: 2.0              # |V0| lower bound (same PE convention as physics)
   mass_diff_min: 0.25      # |m1 - m2|
 
-# Target pool sizes (generation caps; train budget may use less)
+# Target pool sizes (generation caps; train budget may use less); index 0 = stage 0
 pools:
-  train: [2048, 4096, 4096, 8192, 16384]
-  test: [256, 512, 512, 1024, 2048]
+  train: [512, 1024, 2048, 4096, 4096, 8192, 16384]
+  test: [64, 128, 256, 512, 512, 1024, 2048]

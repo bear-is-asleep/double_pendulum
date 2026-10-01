@@ -2,7 +2,7 @@
 
 Layout under ``data_root`` (default ``data/``)::
 
-  stage{S}_{split}.npz   # S in 1..5, split in {train, val, test}
+  stage{S}_{split}.npz   # S in 0..6, split in {train, val, test}
 
 Array keys (this is the schema; keep stable for readers / Step 4b)::
 
@@ -41,13 +41,13 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-from double_pendulum.physics import (
+from srcs.physics.core import (
   PendulumParams,
   PendulumState,
   Trajectory,
   integrate_rk4,
 )
-from double_pendulum.sampler import SampleRow, sample
+from srcs.simulation.sampler import SampleRow, sample
 
 logger = logging.getLogger(__name__)
 
@@ -640,13 +640,16 @@ def generate_all_stages(
   seed: int | None = None,
   overwrite_frozen: bool = False,
 ) -> dict[int, dict[str, Path]]:
-  """Generate pools for stages 1..5 (or subset). Pool sizes from YAML by default."""
-  num_stages = int(sampler_cfg.get("num_stages", 5))
-  stage_list = stages if stages is not None else list(range(1, num_stages + 1))
+  """Generate pools for stages 0..6 (or subset). Pool sizes from YAML by default."""
+  from srcs.simulation.sampler import pool_index, stage_id_bounds
+
+  lo, hi = stage_id_bounds(sampler_cfg)
+  stage_list = stages if stages is not None else list(range(lo, hi + 1))
+  n_pools = hi - lo + 1
   pools_cfg = sampler_cfg["pools"]
   train_ns = train_counts if train_counts is not None else list(pools_cfg["train"])
   test_ns = test_counts if test_counts is not None else list(pools_cfg["test"])
-  if len(train_ns) < num_stages or len(test_ns) < num_stages:
+  if len(train_ns) < n_pools or len(test_ns) < n_pools:
     raise ValueError("train/test pool size lists must cover all stages")
 
   gen = np.random.default_rng(
@@ -658,8 +661,8 @@ def generate_all_stages(
       stage,
       data_root,
       sampler_cfg,
-      train_n=int(train_ns[stage - 1]),
-      test_n=int(test_ns[stage - 1]),
+      train_n=int(train_ns[pool_index(stage, sampler_cfg)]),
+      test_n=int(test_ns[pool_index(stage, sampler_cfg)]),
       val_fraction=val_fraction,
       rng=gen,
       overwrite_frozen=overwrite_frozen,

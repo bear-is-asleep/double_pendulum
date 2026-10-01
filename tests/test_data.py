@@ -7,8 +7,8 @@ import copy
 import numpy as np
 import pytest
 
-from configs.loader import load_model_config, load_sampler_config
-from double_pendulum.data import (
+from srcs.loader import load_model_config, load_sampler_config
+from srcs.simulation.data import (
   FrozenPoolError,
   build_pool,
   carve_validation,
@@ -20,7 +20,7 @@ from double_pendulum.data import (
   pool_path,
   save_pool,
 )
-from double_pendulum.physics import wrap_angle
+from srcs.physics import wrap_angle
 
 
 def _tiny_sampler_cfg() -> dict:

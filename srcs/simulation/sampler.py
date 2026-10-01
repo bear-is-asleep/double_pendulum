@@ -13,9 +13,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from double_pendulum.physics import (
+from srcs.physics.core import (
   PendulumParams,
   PendulumState,
+  eom_denominator,
   integrate_rk4,
   potential_energy,
 )
@@ -77,6 +78,19 @@ class SamplingError(RuntimeError):
   """Could not collect ``n`` accepted rows within per-row attempt budget."""
 
 
+def stage_id_bounds(cfg: dict) -> tuple[int, int]:
+  """Inclusive curriculum stage id range (default ids 0..6)."""
+  lo = int(cfg.get("stage_min", 0))
+  hi = int(cfg.get("num_stages", 6))
+  return lo, hi
+
+
+def pool_index(stage: int, cfg: dict) -> int:
+  """Index into ``pools.train`` / ``pools.test`` for stage id ``stage``."""
+  lo, _ = stage_id_bounds(cfg)
+  return stage - lo
+
+
 def _stage_box(cfg: dict, stage: int) -> dict:
   key = f"stage{stage}"
   if key not in cfg:
@@ -88,11 +102,6 @@ def _rng_from_cfg(cfg: dict, rng: np.random.Generator | None) -> np.random.Gener
   if rng is not None:
     return rng
   return np.random.default_rng(int(cfg.get("seed", 0)))
-
-
-def _eom_denominator(theta1: float, theta2: float, m1: float, m2: float) -> float:
-  delta = theta1 - theta2
-  return 2.0 * m1 + m2 - m2 * np.cos(2.0 * delta)
 
 
 def _draw_uniform(rng: np.random.Generator, low: float, high: float) -> float:
@@ -118,26 +127,38 @@ def draw_candidate(
   theta2 = _draw_uniform(rng, th_lo, th_hi)
   omega1 = _draw_uniform(rng, om_lo, om_hi)
   omega2 = _draw_uniform(rng, om_lo, om_hi)
+  if stage == 0:
+    # Same IC box as stage 1, but exactly one joint starts at rest.
+    if rng.integers(2) == 0:
+      omega1 = 0.0
+    else:
+      omega2 = 0.0
 
-  if stage == 1:
-    g = float(cfg["g_stage1"])
-    m1 = m2 = float(cfg["m_equal"])
+  m_equal = float(cfg["m_equal"])
+  if stage in (0, 1):
+    g = float(cfg["g_zero"])
+    m1 = m_equal
+    m2 = 0.0
   elif stage == 2:
-    g = float(cfg["g_low"])
-    m1 = m2 = float(cfg["m_equal"])
+    g = float(cfg["g_zero"])
+    m1 = m2 = m_equal
   elif stage == 3:
-    g = float(cfg["g_high"])
-    m1 = m2 = float(cfg["m_equal"])
+    g = float(cfg["g_low"])
+    m1 = m2 = m_equal
   elif stage == 4:
-    g = _draw_uniform(rng, g_min, g_max)
-    m1 = m2 = float(cfg["m_equal"])
+    g = float(cfg["g_high"])
+    m1 = m2 = m_equal
   elif stage == 5:
+    g = _draw_uniform(rng, g_min, g_max)
+    m1 = m2 = m_equal
+  elif stage == 6:
     g = _draw_uniform(rng, g_min, g_max)
     m_lo, m_hi = box["m"]
     m1 = _draw_uniform(rng, m_lo, m_hi)
     m2 = _draw_uniform(rng, m_lo, m_hi)
   else:
-    raise ValueError(f"stage must be 1..{cfg.get('num_stages', 5)}, got {stage}")
+    lo, hi = stage_id_bounds(cfg)
+    raise ValueError(f"stage must be {lo}..{hi}, got {stage}")
 
   return SampleRow(theta1, theta2, omega1, omega2, m1, m2, ell, g)
 
@@ -161,14 +182,28 @@ def check_static_constraints(
 
   if row.g < 0.0 or row.g < g_min or row.g > g_max:
     return "gravity_out_of_band"
-  if row.m1 < m_min or row.m2 < m_min:
-    return "mass_below_min"
-  if row.m2 <= 0.0:
-    return "m2_nonpositive"
+
+  m_equal = float(cfg["m_equal"])
+  if stage in (0, 1):
+    if row.m2 != 0.0:
+      return "stage1_m2_not_zero"
+    if row.m1 != m_equal:
+      return "stage1_m1_not_equal"
+    if row.m1 < m_min:
+      return "mass_below_min"
+    if stage == 0:
+      one_zero = (row.omega1 == 0.0) ^ (row.omega2 == 0.0)
+      if not one_zero:
+        return "stage0_omega_not_singular"
+  else:
+    if row.m1 < m_min or row.m2 < m_min:
+      return "mass_below_min"
+    if row.m2 <= 0.0:
+      return "m2_nonpositive"
   if abs(row.omega1) > omega0_max or abs(row.omega2) > omega0_max:
     return "omega0_exceeds_max"
 
-  den = _eom_denominator(row.theta1, row.theta2, row.m1, row.m2)
+  den = eom_denominator(row.theta1, row.theta2, row.m1, row.m2)
   if den < den_min:
     return "eom_denominator_too_small"
 
@@ -176,17 +211,17 @@ def check_static_constraints(
   params = PendulumParams(row.m1, row.m2, row.l, row.l, row.g)
   v0 = potential_energy(state, params)
 
-  if stage == 4:
-    pe_min = float(_stage_box(cfg, 4)["pe_min"])
-    if v0 < pe_min:
-      return "stage4_pe_below_min"
   if stage == 5:
     pe_min = float(_stage_box(cfg, 5)["pe_min"])
-    mass_gap = float(_stage_box(cfg, 5)["mass_diff_min"])
     if v0 < pe_min:
       return "stage5_pe_below_min"
+  if stage == 6:
+    pe_min = float(_stage_box(cfg, 6)["pe_min"])
+    mass_gap = float(_stage_box(cfg, 6)["mass_diff_min"])
+    if v0 < pe_min:
+      return "stage6_pe_below_min"
     if abs(row.m1 - row.m2) < mass_gap:
-      return "stage5_mass_gap"
+      return "stage6_mass_gap"
 
   if not np.isfinite(v0):
     return "nonfinite_pe"
@@ -262,9 +297,9 @@ def sample(
   """Draw ``n`` accepted IC rows for curriculum stage ``stage``."""
   if n < 0:
     raise ValueError("n must be non-negative")
-  num_stages = int(cfg.get("num_stages", 5))
-  if stage < 1 or stage > num_stages:
-    raise ValueError(f"stage must be 1..{num_stages}, got {stage}")
+  lo, hi = stage_id_bounds(cfg)
+  if stage < lo or stage > hi:
+    raise ValueError(f"stage must be {lo}..{hi}, got {stage}")
 
   gen = _rng_from_cfg(cfg, rng)
   max_per_row = int(cfg["max_draw_attempts"])

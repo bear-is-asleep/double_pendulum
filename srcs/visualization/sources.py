@@ -4,7 +4,7 @@ Apps and ``plots.py`` should not read ``.npz`` files directly in the UI layer.
 Instead they use a small protocol so the same animator can show:
 
 * ground truth from dataset pools (today), and
-* neural-network rollouts (once checkpoint inference exists).
+* neural-network rollouts via ``SurrogateSource`` in ``surrogate.py``.
 
 See ``docs/visualization.md`` for how the pieces connect.
 """
@@ -17,8 +17,13 @@ from typing import Literal, Protocol, runtime_checkable
 import numpy as np
 from numpy.typing import NDArray
 
-from double_pendulum.data import TrajectoryView
-from double_pendulum.physics import PendulumParams, PendulumState, cartesian, integrate_rk4
+from srcs.simulation.data import TrajectoryView
+from srcs.physics.core import PendulumParams, PendulumState, cartesian, integrate_rk4
+
+__all__ = [
+  "GroundTruthSource",
+  "TrajectorySource",
+]
 
 
 @runtime_checkable
@@ -27,7 +32,7 @@ class TrajectorySource(Protocol):
   Time-discrete pendulum motion on a fixed grid.
 
   Frame index ``k`` runs from ``0`` to ``n_frames() - 1``. All sources share the
-  same calling convention so ``build_svg``, gif export, and future surrogate
+  same calling convention so ``build_svg``, gif export, and surrogate
   overlays can treat them interchangeably.
   """
 
@@ -142,41 +147,3 @@ class GroundTruthSource:
       )
       for i in range(traj.t.shape[0])
     ]
-
-
-@dataclass
-class SurrogateSource:
-  """
-  Placeholder for MLP trajectory predictions.
-
-  The dataset app exposes UI hooks (overlay switch, ``run_id`` field) but keeps
-  them disabled until ``is_available()`` is true. A future checkpoint loader will
-  set ``run_id``, flip ``enabled``, and implement ``predict_series``.
-  """
-
-  run_id: str | None = None
-  enabled: bool = False
-
-  def is_available(self) -> bool:
-    return bool(self.enabled and self.run_id)
-
-  def predict_series(
-    self,
-    t: NDArray[np.float64],
-    ic: PendulumState,
-    params: PendulumParams,
-  ) -> NDArray[np.float64]:
-    """
-    Predict the 6-D training target at each time in ``t``.
-
-    Returns an array of shape ``(len(t), 6)`` with columns::
-
-      sin(theta1), cos(theta1), sin(theta2), cos(theta2), omega1, omega2
-
-    Decode scalar angles with ``atan2(sin, cos)`` before cartesian drawing.
-    Lengths are fixed in this project and are not model inputs.
-    """
-    raise NotImplementedError(
-      "Surrogate inference is not wired yet. "
-      f"run_id={self.run_id!r}; implement predict_series when the checkpoint loader exists."
-    )

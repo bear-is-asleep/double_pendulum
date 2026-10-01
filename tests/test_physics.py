@@ -5,11 +5,13 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 
-from double_pendulum.physics import (
+from srcs.physics import (
   DoublePendulum,
   PendulumParams,
   PendulumState,
+  _eom_numerators,
   cartesian,
   derivatives,
   integrate_rk4,
@@ -91,6 +93,51 @@ def test_energy_conserved_zero_gravity_smoke() -> None:
   assert np.nanmax(np.abs(traj.energy - traj.energy[0])) < 1e-6
 
 
+def test_zero_m1_off_singularity_finite() -> None:
+  p = PendulumParams(m1=0.0, m2=1.0, g=0.0)
+  dydt = derivatives(np.array([0.5, 0.3, 0.2, -0.1]), p)
+  assert np.all(np.isfinite(dydt))
+
+
+def test_zero_m2_single_link_limit() -> None:
+  p = PendulumParams(m1=1.0, m2=0.0, g=9.81)
+  dydt = derivatives(np.array([0.3, 0.8, 0.0, 0.0]), p)
+  assert np.all(np.isfinite(dydt))
+
+
+def test_integrate_m1_zero_g_zero_no_nan() -> None:
+  """Live-app path: m1=0, g=0, nonzero omega must stay finite over RK4."""
+  p = PendulumParams(m1=0.0, m2=1.0, g=0.0)
+  s = PendulumState(theta1=0.5, theta2=0.3, omega1=1.0, omega2=0.5)
+  traj = integrate_rk4(s, p, t_end=2.0, dt=1.0 / 240.0)
+  assert not np.isnan(traj.theta1).any()
+  assert not np.isnan(traj.omega1).any()
+  e0 = float(traj.energy[0])
+  assert np.nanmax(np.abs(traj.energy - e0)) < 5e-3
+
+
+def test_mass_matrix_solve_matches_divided_eom() -> None:
+  """M qdd = b path must match the old num/(l*den) accelerations."""
+  p = PendulumParams(m1=1.1, m2=0.9, g=9.81)
+  s = PendulumState(theta1=0.7, theta2=0.2, omega1=0.4, omega2=-0.6)
+  dydt = derivatives(s.as_array(), p)
+  num1, num2, den = _eom_numerators(
+    s.theta1,
+    s.theta2,
+    s.omega1,
+    s.omega2,
+    p.m1,
+    p.m2,
+    p.l1,
+    p.l2,
+    p.g,
+  )
+  a1 = num1 / (p.l1 * den)
+  a2 = num2 / (p.l2 * den)
+  assert math.isclose(float(dydt[2]), a1, rel_tol=0.0, abs_tol=1e-12)
+  assert math.isclose(float(dydt[3]), a2, rel_tol=0.0, abs_tol=1e-12)
+
+
 def test_step_advances_time_and_trail() -> None:
   sim = DoublePendulum(dt=1 / 120)
   sim.step(10)
@@ -102,13 +149,4 @@ def test_step_advances_time_and_trail() -> None:
 
 
 if __name__ == "__main__":
-  test_hanging_equilibrium()
-  test_cartesian_hanging()
-  test_potential_zero_at_hanging()
-  test_total_energy_is_T_plus_V()
-  test_wrap_angle_negpi_pi()
-  test_integrate_rk4_trajectory()
-  test_energy_nearly_conserved()
-  test_energy_conserved_zero_gravity_smoke()
-  test_step_advances_time_and_trail()
-  print("All physics checks passed.")
+  raise SystemExit(pytest.main([__file__, "-q"]))

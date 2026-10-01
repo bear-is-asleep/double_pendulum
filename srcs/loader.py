@@ -7,8 +7,9 @@ from typing import Any
 
 import yaml
 
-_CONFIG_ROOT = Path(__file__).resolve().parent
+_CONFIG_ROOT = Path(__file__).resolve().parent.parent / "configs"
 _MODELS_DIR = _CONFIG_ROOT / "models"
+_SMOKE_DIR = _CONFIG_ROOT / "smoke"
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -49,3 +50,34 @@ def list_model_configs(models_dir: Path | None = None) -> list[str]:
   return sorted(
     p.stem for p in root.glob("*.yaml") if p.stem != "base"
   )
+
+
+def load_baseline_lock(path: Path | None = None) -> dict[str, Any]:
+  """Step 5 locked width/depth/k/LR/batch (experiments 1-4 must reuse)."""
+  lock_path = path or (_CONFIG_ROOT / "baseline_lock.yaml")
+  return _read_yaml(lock_path)
+
+
+def list_smoke_presets(smoke_dir: Path | None = None) -> list[str]:
+  """Preset names under ``configs/smoke/*.yaml`` (small, sanity, ...)."""
+  root = smoke_dir or _SMOKE_DIR
+  return sorted(p.stem for p in root.glob("*.yaml"))
+
+
+def load_smoke_preset(
+  name: str,
+  smoke_dir: Path | None = None,
+) -> dict[str, Any]:
+  """Load one smoke preset (data + train paths and hyperparameters)."""
+  root = smoke_dir or _SMOKE_DIR
+  path = root / f"{name}.yaml"
+  if not path.is_file():
+    known = ", ".join(list_smoke_presets(root)) or "(none)"
+    raise FileNotFoundError(f"unknown smoke preset {name!r}; known: {known}")
+  preset = _read_yaml(path)
+  if preset.get("name") != name:
+    raise KeyError(f"{path}: 'name' must be {name!r}, got {preset.get('name')!r}")
+  for key in ("data_root", "runs_root", "run_id", "stages", "data", "train"):
+    if key not in preset:
+      raise KeyError(f"{path}: missing required key {key!r}")
+  return preset

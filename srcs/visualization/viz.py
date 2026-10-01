@@ -5,7 +5,7 @@ theta = 0 hanging down. SVG y is flipped when mapping physics coordinates to pix
 
 Typical usage::
 
-  from double_pendulum.viz import build_svg, PendulumFrame, SHARED_HEAD_HTML
+  from srcs.visualization.viz import build_svg, PendulumFrame, SHARED_HEAD_HTML
 
   frame = PendulumFrame(params=p, state=s, trail=[(x2, y2), ...])
   html = build_svg(frame, show_trail=True)
@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from double_pendulum.physics import (
+from srcs.physics.core import (
   DoublePendulum,
   PendulumParams,
   PendulumState,
@@ -56,13 +56,24 @@ class PendulumFrame:
     return cls(params=sim.params, state=sim.state, trail=t)
 
 
+@dataclass(frozen=True)
+class LayerStyle:
+  """Stroke and bob colors for dashed overlay arms."""
+
+  dashed: bool = True
+  stroke: str = "#6b4c9a"
+  bob1: str = "#9b7bb8"
+  bob2: str = "#e07b4a"
+
+
 def build_svg(
-  drawable: DoublePendulum | PendulumFrame,
+  drawable: DoublePendulum | PendulumFrame | None = None,
   *,
   show_trail: bool,
   width: int = CANVAS,
   height: int = CANVAS,
   overlay: PendulumFrame | None = None,
+  overlays: Sequence[tuple[PendulumFrame, LayerStyle]] | None = None,
 ) -> str:
   """
   Return a complete SVG document string for one pendulum configuration.
@@ -70,22 +81,36 @@ def build_svg(
   Parameters
   ----------
   drawable
-      Either a live ``DoublePendulum`` or a pre-built ``PendulumFrame``.
+      Primary ``PendulumFrame`` or live ``DoublePendulum``. None draws floor only.
   show_trail
       When True and the trail has at least two points, draw the tip polyline.
   overlay
-      Optional second pendulum (e.g. neural surrogate). Drawn with dashed arms
-      and a distinct palette so it sits on top of the primary trace.
+      Optional second pendulum (legacy single overlay).
+  overlays
+      Additional dashed pendulums with explicit palette per layer.
 
   Bob radius scales slightly with mass so unequal masses are visible at a glance.
   """
-  if isinstance(drawable, DoublePendulum):
+  extra: list[tuple[PendulumFrame, LayerStyle]] = []
+  if overlay is not None:
+    extra.append((overlay, LayerStyle()))
+  if overlays:
+    extra.extend(overlays)
+
+  frame: PendulumFrame | None
+  if drawable is None:
+    frame = None
+  elif isinstance(drawable, DoublePendulum):
     frame = PendulumFrame.from_sim(drawable)
   else:
     frame = drawable
 
   # Fit both arm lengths into the square viewBox with uniform scale.
-  span = frame.params.l1 + frame.params.l2
+  span = 2.0
+  if frame is not None:
+    span = frame.params.l1 + frame.params.l2
+  elif extra:
+    span = extra[0][0].params.l1 + extra[0][0].params.l2
   scale = (min(width, height) / 2 - MARGIN) / max(span, 0.1)
   cx, cy = width / 2, height / 2
 
@@ -93,15 +118,15 @@ def build_svg(
     # Physics +y up; SVG +y down.
     return cx + x * scale, cy - y * scale
 
-  def arm_svg(f: PendulumFrame, *, dashed: bool) -> str:
+  def arm_svg(f: PendulumFrame, style: LayerStyle) -> str:
     x1, y1, x2, y2 = cartesian(f.state, f.params)
     px, py = tx(0, 0)
     a1x, a1y = tx(x1, y1)
     a2x, a2y = tx(x2, y2)
-    dash = ' stroke-dasharray="6 4"' if dashed else ""
-    stroke = "#6b4c9a" if dashed else "#1a2a3a"
-    bob1 = "#9b7bb8" if dashed else "#2f6f8f"
-    bob2 = "#e07b4a" if dashed else "#c45c26"
+    dash = ' stroke-dasharray="6 4"' if style.dashed else ""
+    stroke = style.stroke if style.dashed else "#1a2a3a"
+    bob1 = style.bob1 if style.dashed else "#2f6f8f"
+    bob2 = style.bob2 if style.dashed else "#c45c26"
     trail_poly = ""
     if show_trail and len(f.trail) > 1:
       trail_pts = " ".join(f"{tx(x, y)[0]:.1f},{tx(x, y)[1]:.1f}" for x, y in f.trail)
@@ -121,9 +146,14 @@ def build_svg(
     <circle cx="{a2x}" cy="{a2y}" r="{8 + 4 * f.params.m2}" fill="{bob2}"/>
     """
 
-  body = arm_svg(frame, dashed=False)
-  if overlay is not None:
-    body += arm_svg(overlay, dashed=True)
+  body = ""
+  if frame is not None:
+    body += arm_svg(frame, LayerStyle(dashed=False))
+  else:
+    px, py = tx(0, 0)
+    body += f'<circle cx="{px}" cy="{py}" r="7" fill="#1a2a3a"/>'
+  for f, style in extra:
+    body += arm_svg(f, style)
 
   return f"""
   <svg viewBox="0 0 {width} {height}" width="100%" height="100%"

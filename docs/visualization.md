@@ -1,28 +1,27 @@
 # Visualization
 
-This repo has two browser apps and a small plotting library. All of them share the same SVG look (`double_pendulum/viz.py`) and the same way to feed trajectories into the UI (`double_pendulum/sources.py`).
+This repo has two browser apps and a small plotting library. All of them share the same SVG look (`srcs/viz.py`) and the same way to feed trajectories into the UI (`srcs/sources.py`).
 
 ## Two apps
 
 | App | Command | Port | Data source |
 | --- | --- | --- | --- |
 | Live sandbox | `python app.py` | 8765 | On-the-fly RK4 (`DoublePendulum` in `physics.py`) |
-| Dataset browser | `python app_data.py` | 8766 | `.npz` pools under `data/` (see `double_pendulum/data.py`) |
+| Dataset browser | `python app_data.py` | 8766 | `.npz` pools under `data/` (see `srcs/data.py`) |
 
 **Live sandbox** is for playing with sliders: you change ICs and parameters and the sim integrates forward every frame.
 
-**Dataset browser** steps through trajectories that were already simulated and saved. You pick curriculum stage (1-5), split (`train` / `val` / `test`), and trajectory index. Under the pendulum animation, a matplotlib panel shows sin/cos, omega, and PE/KE with a red cursor synced to the current frame (toggle **Show time series**). Controls sit in a column on the right. Playback reads either:
+**Dataset browser** steps through saved trajectories (stage, split, traj index). Change **data_root** in the sidebar (Apply) to point at another pool directory. Under the animation, a Plotly panel shows sin θ₁/θ₂, ω, and PE/KE synced to the current frame (**Show time series**). Reference curves come from **stored** disk labels.
 
-- **stored** — sin/cos, ω, and energy arrays from disk (what the network will train on), or  
-- **reintegrate** — RK4 from the stored IC and physical parameters on the same time grid (sanity check against the simulator).
+**Checkpoint comparison (v1, `app_data` only):** use **Add model** with a path to `runs/.../checkpoints/best.pt`. Each loaded net draws a dashed pendulum (pointwise prediction over the pool time grid, same IC row as training). Toggle **Stored** and each **NN** layer independently. **Chart: values** overlays stored vs models; **Chart: errors** plots stored − NN per channel. Shared UI lives in `srcs/visualization/compare_panel.py` for a future `app.py` port.
 
-The dataset app also shows read-only metadata: `g`, masses, and max energy drift `|E(t) − E(0)|` on the stored series.
+The dataset app shows read-only metadata: `g`, masses, and max energy drift `|E(t) − E(0)|` on the stored series.
 
 ## On-disk pools (what `app_data` expects)
 
-Pools live as `data/stage{S}_{split}.npz` (for example `data/stage1_test.npz`). Each file holds many trajectories on a shared time vector `t`. Per-trajectory arrays include wrapped angles, sin/cos targets, ω, and PE/KE/E. Full schema and array names are documented in the module docstring of `double_pendulum/data.py`.
+Pools live as `data/stage{S}_{split}.npz` (for example `data/stage1_test.npz`). Each file holds many trajectories on a shared time vector `t`. Per-trajectory arrays include wrapped angles, sin/cos targets, ω, and PE/KE/E. Full schema and array names are documented in the module docstring of `srcs/data.py`.
 
-Generate pools with the data CLI (see `double_pendulum/generate_data.py`). Until pools exist, `app_data.py` shows a short message instead of the animator.
+Generate pools with the data CLI (see `srcs/generate_data.py`). Until pools exist, `app_data.py` shows a short message instead of the animator.
 
 ## Trajectory sources (plug-in shape)
 
@@ -32,28 +31,28 @@ Anything that drives the animator or gif export should implement the `Trajectory
 
 **GroundTruthSource** wraps a `TrajectoryView` from `open_pool(...).get_traj(i)`.
 
-**SurrogateSource** is reserved for neural-network predictions over time. It is a stub today: the UI has a disabled “ANN overlay” switch and `predict_series` raises until a checkpoint loader rebuilds the MLP and runs inference. When wired, the app will draw the ground-truth arm solid and the surrogate dashed (see `build_svg(..., overlay=...)` in `viz.py`).
+**SurrogateSource** (`srcs/visualization/surrogate.py`) loads a checkpoint and predicts the 6-D training target over time. **GroundTruthSource** still reads `.npz` pools via `srcs/simulation/data.py`. Multi-arm SVG uses `build_svg(..., overlays=[...])` in `viz.py`.
 
 ## Static plots and gifs
 
-`double_pendulum/plots.py` handles matplotlib figures and Pillow gifs. It does not import NiceGUI.
+`srcs/plots.py` handles matplotlib figures and Pillow gifs. It does not import NiceGUI.
 
 **Time series (PNG)** — three panels per trajectory: sin/cos (not raw θ, so branch cuts do not lie to you), ω₁/ω₂, and PE/KE/total E.
 
 ```bash
-python -m double_pendulum.plots timeseries --data-root data --stage 1 --split test --traj 0
+python -m srcs.visualization.plots timeseries --data-root data --stage 1 --split test --traj 0
 ```
 
 **Gifs** — raster frames via matplotlib (same geometry as the SVG), written with Pillow:
 
 ```bash
-python -m double_pendulum.plots gif --stage 1 --split test --indices 0 1 --stride 2
+python -m srcs.visualization.plots gif --stage 1 --split test --indices 0 1 --stride 2
 ```
 
 **Training / eval figures** — read run artifacts and write PNGs. These work on empty or toy files so CI can smoke them without a trained model:
 
 ```bash
-python -m double_pendulum.plots eval --metrics runs/foo/metrics.jsonl --out-dir figures/eval
+python -m srcs.visualization.plots eval --metrics runs/foo/metrics.jsonl --out-dir figures/eval
 ```
 
 Expected inputs:
@@ -65,9 +64,9 @@ Expected inputs:
 ## Layout of Python modules
 
 ```
-double_pendulum/viz.py      SVG + shared CSS (no NiceGUI)
-double_pendulum/sources.py  TrajectorySource, GroundTruthSource, SurrogateSource
-double_pendulum/plots.py    PNG/gif + eval plot helpers + CLI
+srcs/viz.py      SVG + shared CSS (no NiceGUI)
+srcs/sources.py  TrajectorySource, GroundTruthSource, SurrogateSource
+srcs/plots.py    PNG/gif + eval plot helpers + CLI
 app.py                      live RK4 UI
 app_data.py                 pool browser UI
 ```

@@ -8,10 +8,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from configs.loader import load_sampler_config
-from double_pendulum.data import build_pool, save_pool
-from double_pendulum.physics import DoublePendulum, PendulumParams, PendulumState
-from double_pendulum.plots import (
+from srcs.loader import load_sampler_config
+from srcs.simulation.data import build_pool, save_pool
+from srcs.physics import DoublePendulum, PendulumParams, PendulumState
+from srcs.visualization.plots import (
   plot_error_vs_t,
   plot_summary_stages,
   plot_training_curves,
@@ -19,9 +19,10 @@ from double_pendulum.plots import (
   svg_smoke_for_source,
   write_trajectory_gif,
 )
-from double_pendulum.live_timeseries import series_from_ground_truth
-from double_pendulum.sources import GroundTruthSource, SurrogateSource
-from double_pendulum.viz import build_svg
+from srcs.visualization.live_timeseries import series_from_ground_truth
+from srcs.visualization.sources import GroundTruthSource
+from srcs.visualization.surrogate import SurrogateSource
+from srcs.visualization.viz import build_svg
 
 
 def _tiny_sampler_cfg() -> dict:
@@ -107,12 +108,20 @@ def test_phase_c_plot_fixtures(tmp_path) -> None:
     assert p.is_file() and p.stat().st_size > 200
 
 
-def test_surrogate_stub_not_available() -> None:
-  s = SurrogateSource(run_id="fake", enabled=False)
-  assert not s.is_available()
-  with pytest.raises(NotImplementedError):
-    s.predict_series(
-      np.array([0.0, 0.1]),
-      PendulumState(0, 0),
-      PendulumParams(),
-    )
+def test_build_svg_multi_overlay() -> None:
+  from srcs.physics import PendulumParams, PendulumState
+  from srcs.visualization.viz import LayerStyle, PendulumFrame
+
+  p = PendulumParams()
+  primary = PendulumFrame(params=p, state=PendulumState(0.5, -0.3, 0.1, -0.2))
+  overlay = PendulumFrame(params=p, state=PendulumState(0.6, -0.2, 0.0, 0.1))
+  style = LayerStyle(dashed=True, stroke="#6b4c9a", bob1="#9b7bb8", bob2="#e07b4a")
+  svg = build_svg(primary, show_trail=False, overlays=[(overlay, style)])
+  assert svg.count('stroke-dasharray="6 4"') >= 1
+
+
+def test_surrogate_load_requires_file(tmp_path: Path) -> None:
+  missing = tmp_path / "nope.pt"
+  s = SurrogateSource(checkpoint_path=missing)
+  with pytest.raises(FileNotFoundError):
+    s.load()

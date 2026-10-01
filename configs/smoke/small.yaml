@@ -1,0 +1,22 @@
+# Baseline train smoke: tiny pools + 2 epochs (pair with generate_smoke_data small).
+
+name: small
+data_root: data/baseline_small
+runs_root: runs/baseline_small
+run_id: baseline_w32_d1_k2_seed0_small
+stages: [0, 1]
+
+data:
+  train_per_stage: 4
+  test_per_stage: 1
+  val_fraction: 0.25
+
+train:
+  model: baseline
+  device: cpu
+  max_epochs: 2
+  hidden_width: 32
+  hidden_depth: 1
+  subsample_stride_k: 2
+  batch_size: 32
+  stage_pass_mse: 1.0e9

@@ -18,14 +18,18 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Generate dataset pools before using `app_data.py` (see `double_pendulum/generate_data.py`).
+Generate dataset pools before using `app_data.py`:
+
+```bash
+python -m srcs.simulation.generate_data --data-root data
+```
 
 ## Plotting (CLI)
 
 ```bash
-python -m double_pendulum.plots timeseries --data-root data --stage 1
-python -m double_pendulum.plots gif --stage 1 --split test --indices 0
-python -m double_pendulum.plots eval --out-dir figures/eval
+python -m srcs.visualization.plots timeseries --data-root data --stage 1
+python -m srcs.visualization.plots gif --stage 1 --split test --indices 0
+python -m srcs.visualization.plots eval --out-dir figures/eval
 ```
 
 ## Tests
@@ -36,9 +40,9 @@ python -m pytest tests/
 
 ## Package layout
 
-- `double_pendulum/physics.py` — parameters, derivatives, RK4, energy, cartesian mapping
-- `double_pendulum/data.py` — `.npz` pool schema, load/save, `TrajectoryView`
-- `double_pendulum/viz.py` — shared SVG + CSS (no UI framework)
-- `double_pendulum/sources.py` — `TrajectorySource`, ground truth and surrogate stubs
-- `double_pendulum/plots.py` — PNG/gif and training-metric figures
+- `srcs/physics/` — RK4, energy, wrapping
+- `srcs/simulation/` — sampler, `.npz` pools, `generate_data` CLI
+- `srcs/model/` — MLP, loss, train tensors
+- `srcs/train/` — `epoch.py`, run dirs, baseline search
+- `srcs/visualization/` — SVG, plots, gifs, trajectory sources
 - `app.py` / `app_data.py` — NiceGUI entrypoints

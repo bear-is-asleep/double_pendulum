@@ -32,10 +32,6 @@ def create_app(data_root: Path = DEFAULT_DATA_ROOT) -> None:
   if not pools:
     ui.add_head_html(SHARED_HEAD_HTML)
     with ui.column().classes("w-full q-pa-md").style("max-width: 640px; margin: 0 auto;"):
-      ui.html('<p class="brand">Dataset trajectories</p>', sanitize=False)
-      ui.label(
-        f"No pools under {root}. Fix data_root below and restart the app, or generate data."
-      )
       ui.input(label="data_root", value=str(root.resolve())).classes("w-full")
     return
 
@@ -169,12 +165,6 @@ def create_app(data_root: Path = DEFAULT_DATA_ROOT) -> None:
   with ui.column().classes("w-full q-pa-md").style(
     "max-width: 1100px; margin: 0 auto; gap: 1.25rem;"
   ):
-    ui.html('<p class="brand">Dataset trajectories</p>', sanitize=False)
-    ui.html(
-      '<p class="lede">Inspect saved simulations: choose curriculum stage, '
-      "data split, and trajectory index. Load checkpoints to overlay NN arms.</p>",
-      sanitize=False,
-    )
 
     with ui.row().classes("w-full items-start").style(
       "gap: 1.25rem; flex-wrap: wrap; align-items: flex-start;"

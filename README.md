@@ -7,6 +7,12 @@ Interactive Python simulation of a planar double pendulum. Dynamics use the Lagr
 | `app.py` | http://localhost:8765 | Live sandbox: sliders change ICs and parameters, sim integrates forward |
 | `app_data.py` | http://localhost:8766 | Browse `.npz` trajectory pools (stage / split / traj index) |
 
+## Demo (surrogate model)
+
+Trained MLP surrogate (`small_v1`, stage 1) rolled out next to the stored physics trajectory:
+
+![Surrogate rollout demo](assets/small_v1_stage1.mp4)
+
 Full visualization guide (sources, CLIs, file formats): **[docs/visualization.md](docs/visualization.md)**.
 
 ## Setup
@@ -22,14 +28,6 @@ Generate dataset pools before using `app_data.py`:
 
 ```bash
 python -m srcs.simulation.generate_data --data-root data
-```
-
-## Plotting (CLI)
-
-```bash
-python -m srcs.visualization.plots timeseries --data-root data --stage 1
-python -m srcs.visualization.plots gif --stage 1 --split test --indices 0
-python -m srcs.visualization.plots eval --out-dir figures/eval
 ```
 
 ## Tests

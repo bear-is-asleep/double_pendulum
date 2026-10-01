@@ -45,15 +45,6 @@ def create_app() -> None:
   with ui.column().classes("w-full items-center q-pa-md").style(
     "max-width: 1100px; margin: 0 auto; gap: 1.25rem;"
   ):
-    with ui.column().classes("w-full").style("gap: 0.25rem; padding-top: 0.5rem;"):
-      ui.html('<p class="brand">Double Pendulum</p>', sanitize=False)
-      ui.html(
-        '<p class="lede">Two linked arms, one fixed pivot, and enough chaos '
-        "to make identical starts drift apart. Nudge angles, spin rates, and "
-        "masses, then watch the lower tip paint its trail.</p>",
-        sanitize=False,
-      )
-
     with ui.row().classes("w-full items-start justify-center").style(
       "gap: 1.25rem; flex-wrap: wrap;"
     ):

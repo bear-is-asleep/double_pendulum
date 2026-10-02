@@ -66,6 +66,17 @@ class LayerStyle:
   bob2: str = "#e07b4a"
 
 
+# Solid primary arm. Dashed overlays keep the colors on LayerStyle.
+_SOLID_ARM = LayerStyle(dashed=False, stroke="#1a2a3a", bob1="#2f6f8f", bob2="#c45c26")
+
+
+def _paint(style: LayerStyle) -> LayerStyle:
+  """Primary arm ignores custom colors so the stored pendulum stays on the house palette."""
+  if style.dashed:
+    return style
+  return _SOLID_ARM
+
+
 def build_svg(
   drawable: DoublePendulum | PendulumFrame | None = None,
   *,
@@ -123,10 +134,11 @@ def build_svg(
     px, py = tx(0, 0)
     a1x, a1y = tx(x1, y1)
     a2x, a2y = tx(x2, y2)
-    dash = ' stroke-dasharray="6 4"' if style.dashed else ""
-    stroke = style.stroke if style.dashed else "#1a2a3a"
-    bob1 = style.bob1 if style.dashed else "#2f6f8f"
-    bob2 = style.bob2 if style.dashed else "#c45c26"
+    paint = _paint(style)
+    dash = ' stroke-dasharray="6 4"' if paint.dashed else ""
+    stroke = paint.stroke
+    bob1 = paint.bob1
+    bob2 = paint.bob2
     trail_poly = ""
     if show_trail and len(f.trail) > 1:
       trail_pts = " ".join(f"{tx(x, y)[0]:.1f},{tx(x, y)[1]:.1f}" for x, y in f.trail)

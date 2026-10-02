@@ -11,11 +11,8 @@ import pytest
 import torch
 
 from srcs.loader import load_baseline_lock, load_model_config, load_sampler_config
-from srcs.train.baseline import (
-  clears_pass_bar,
-  iter_search_grid,
-  train_baseline_trial,
-)
+from srcs.train.base import clears_pass_bar
+from srcs.train.baseline import BaselineTrainer, iter_search_grid
 from srcs.simulation.data import build_pool, carve_validation, pool_path, save_pool
 from srcs.model import build_mlp, weighted_surrogate_loss
 from srcs.model.mlp import count_parameters
@@ -83,7 +80,7 @@ def test_baseline_trial_writes_run_dir(tmp_path: Path) -> None:
   trial["stage_pass_mse"] = 1e9  # smoke: do not require real convergence
 
   runs_root = tmp_path / "runs"
-  res = train_baseline_trial(
+  res = BaselineTrainer().train_trial(
     trial,
     data_root=data_root,
     stages=[1],
@@ -151,7 +148,7 @@ def test_baseline_search_smoke_trial(tmp_path: Path) -> None:
   trial_cfg["early_stop_patience"] = 5
   trial_cfg["stage_pass_mse"] = 1e9
 
-  res = train_baseline_trial(
+  res = BaselineTrainer().train_trial(
     trial_cfg,
     data_root=data_root,
     stages=[0, 1],

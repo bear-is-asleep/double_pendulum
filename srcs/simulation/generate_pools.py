@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from srcs.loader import load_model_config, load_sampler_config
+from srcs.utils.paths import ensure_dir
 from srcs.simulation.data import generate_all_stages
 from srcs.simulation.sampler import pool_index, stage_id_bounds
 
@@ -81,8 +82,7 @@ def generate_pools(
   if test_ns is not None:
     test_ns = pad_counts_for_stages(stage_list, test_ns, sampler_cfg, "test")
 
-  data_root = Path(data_root)
-  data_root.mkdir(parents=True, exist_ok=True)
+  data_root = ensure_dir(data_root)
   return generate_all_stages(
     data_root,
     sampler_cfg,

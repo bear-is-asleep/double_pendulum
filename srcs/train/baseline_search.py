@@ -11,7 +11,6 @@ Example::
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 from pathlib import Path
 
@@ -19,12 +18,10 @@ import yaml
 
 from srcs.loader import load_model_config, load_sampler_config
 from srcs.model.train_data import curriculum_stage_ids
-from srcs.train.baseline import (
-  iter_search_grid,
-  pick_smallest_passing,
-  train_baseline_trial,
-)
+from srcs.train.baseline import BaselineTrainer, iter_search_grid, pick_smallest_passing
 from srcs.train.run_dir import baseline_run_id
+from srcs.utils.json_io import read_json
+from srcs.utils.paths import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +37,13 @@ def _write_lock_file(path: Path, winner_cfg: dict, run_id: str) -> None:
     "stage_pass_mse": float(winner_cfg["stage_pass_mse"]),
     "note": "Do not change for experiments 1-4. Re-run search if data or pass bar moves.",
   }
-  path.parent.mkdir(parents=True, exist_ok=True)
+  ensure_parent_dir(path)
   with path.open("w", encoding="utf-8") as f:
     yaml.safe_dump(lock, f, sort_keys=False)
 
 
 def _winner_cfg_from_run(winner_run_dir: Path, base_cfg: dict) -> dict:
-  summary = json.loads((winner_run_dir / "summary.json").read_text(encoding="utf-8"))
+  summary = read_json(winner_run_dir / "summary.json")
   cfg = dict(base_cfg)
   cfg["hidden_width"] = summary["hidden_width"]
   cfg["hidden_depth"] = summary["hidden_depth"]
@@ -72,7 +69,7 @@ def run_baseline_search(
     rid = baseline_run_id(trial_cfg)
     logger.info("trial %s", rid)
     try:
-      res = train_baseline_trial(
+      res = BaselineTrainer().train_trial(
         trial_cfg,
         data_root=data_root,
         stages=stages,

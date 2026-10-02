@@ -26,6 +26,13 @@ __all__ = [
 ]
 
 
+def _max_abs_energy_drift(energy: NDArray[np.float64]) -> float:
+  """Largest |E(t) - E(0)|. Empty series is zero drift."""
+  if energy.size == 0:
+    return 0.0
+  return float(np.max(np.abs(energy - energy[0])))
+
+
 @runtime_checkable
 class TrajectorySource(Protocol):
   """
@@ -75,6 +82,8 @@ class GroundTruthSource:
   view: TrajectoryView
   mode: Literal["stored", "reintegrate"] = "stored"
   _reint_states: list[PendulumState] | None = None
+  # Full tip path, filled on first trail request. View is fixed after init.
+  _tips: list[tuple[float, float]] | None = None
 
   def __post_init__(self) -> None:
     if self.mode == "reintegrate":
@@ -97,19 +106,23 @@ class GroundTruthSource:
     return self._reint_states[k]
 
   def tip_trail(self, k: int) -> list[tuple[float, float]]:
+    return self._all_tips()[: k + 1]
+
+  def _all_tips(self) -> list[tuple[float, float]]:
+    """Lower-bob (x2, y2) at every frame. One cartesian pass, then slice."""
+    if self._tips is not None:
+      return self._tips
     p = self.params()
-    out: list[tuple[float, float]] = []
-    for i in range(k + 1):
+    tips: list[tuple[float, float]] = []
+    for i in range(self.n_frames()):
       _, _, x2, y2 = cartesian(self.frame_state(i), p)
-      out.append((x2, y2))
-    return out
+      tips.append((x2, y2))
+    self._tips = tips
+    return tips
 
   def energy_drift_max(self) -> float:
     """Largest absolute deviation of total energy from its initial value on disk."""
-    e = self.view.energy
-    if e.size == 0:
-      return 0.0
-    return float(np.max(np.abs(e - e[0])))
+    return _max_abs_energy_drift(self.view.energy)
 
   def ic_meta(self) -> dict[str, float]:
     """

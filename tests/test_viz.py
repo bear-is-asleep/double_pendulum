@@ -12,9 +12,6 @@ from srcs.loader import load_sampler_config
 from srcs.simulation.data import build_pool, save_pool
 from srcs.physics import DoublePendulum, PendulumParams, PendulumState
 from srcs.visualization.plots import (
-  plot_error_vs_t,
-  plot_summary_stages,
-  plot_training_curves,
   plot_trajectory_timeseries,
   svg_smoke_for_source,
   write_trajectory_gif,
@@ -61,12 +58,71 @@ def test_ground_truth_source_reader_wiring(tmp_path) -> None:
 
 
 def test_playback_series_shapes() -> None:
+  from srcs.visualization.comparison_data import reference_from_ground_truth
+  from srcs.visualization.surrogate import state_on_pred_grid
+
   cfg = _tiny_sampler_cfg()
   pool = build_pool(1, 1, cfg, rng=np.random.default_rng(5))
-  src = GroundTruthSource(pool.get_traj(0), mode="stored")
+  view = pool.get_traj(0)
+  src = GroundTruthSource(view, mode="stored")
   s = series_from_ground_truth(src)
   assert s.t.shape == s.sin_theta1.shape == s.omega1.shape
   assert s.t.shape[0] == pool.n_t
+  # Playback and the comparison chart must share the same stored columns.
+  ref = reference_from_ground_truth(src)
+  for name in ("t", "sin_theta1", "sin_theta2", "omega1", "omega2", "potential", "kinetic"):
+    assert np.array_equal(getattr(s, name), getattr(ref, name))
+  energy = src.view.energy
+  assert src.energy_drift_max() == float(np.max(np.abs(energy - energy[0])))
+  full = src.tip_trail(src.n_frames() - 1)
+  assert src.tip_trail(1) == full[:2]
+  pred = np.zeros((src.n_frames(), 6), dtype=np.float64)
+  assert state_on_pred_grid(pred, view, 0) == view.frame_at(0)
+
+
+def test_chart_traces_values_and_residuals() -> None:
+  from srcs.visualization.comparison_data import CHART_LAYER_COLOR_SETS, LayerSeries, ReferenceSeries
+  from srcs.visualization.live_timeseries import ComparisonChartState, chart_traces
+
+  t = np.array([0.0, 1.0])
+  zeros = np.zeros(2)
+  ref = ReferenceSeries(
+    t=t,
+    sin_theta1=np.array([0.0, 1.0]),
+    sin_theta2=zeros,
+    omega1=zeros,
+    omega2=zeros,
+    potential=zeros,
+    kinetic=zeros,
+  )
+  layer = LayerSeries(
+    layer_id="nn:x",
+    label="x",
+    sin_theta1=np.array([0.0, 0.25]),
+    sin_theta2=zeros,
+    omega1=zeros,
+    omega2=zeros,
+    potential=zeros,
+    kinetic=zeros,
+    trace_colors=CHART_LAYER_COLOR_SETS[0],
+  )
+  values = ComparisonChartState(
+    ref=ref,
+    layers=[layer],
+    visible={"stored": True, "nn:x": True},
+    display_mode="values",
+  )
+  names = [spec.name for spec in chart_traces(values) if spec.name.startswith("sin theta1")]
+  assert names == ["sin theta1 (stored)", "sin theta1 (x)"]
+  errors = ComparisonChartState(
+    ref=ref,
+    layers=[layer],
+    visible={"stored": True, "nn:x": True},
+    display_mode="errors",
+  )
+  sin1 = [spec for spec in chart_traces(errors) if spec.name.startswith("sin theta1")]
+  assert len(sin1) == 1
+  assert np.allclose(sin1[0].y, np.array([0.0, 0.75]))
 
 
 def test_reintegrate_mode_same_length(tmp_path) -> None:
@@ -91,21 +147,6 @@ def test_gif_export(tmp_path) -> None:
   src = GroundTruthSource(pool.get_traj(0), mode="stored")
   out = write_trajectory_gif(src, tmp_path / "x.gif", stride=2, frame_size=160)
   assert out.is_file() and out.stat().st_size > 100
-
-
-def test_phase_c_plot_fixtures(tmp_path) -> None:
-  root = Path(__file__).parent / "fixtures"
-  np.savez(
-    tmp_path / "error_vs_t.npz",
-    t=np.linspace(0, 1, 5),
-    error=np.linspace(0.1, 0.5, 5),
-  )
-  plot_training_curves(root / "metrics.jsonl", tmp_path / "train.png")
-  plot_error_vs_t(tmp_path / "error_vs_t.npz", tmp_path / "err.png")
-  plot_summary_stages(root / "summary.json", tmp_path / "sum.png")
-  for name in ("train.png", "err.png", "sum.png"):
-    p = tmp_path / name
-    assert p.is_file() and p.stat().st_size > 200
 
 
 def test_build_svg_multi_overlay() -> None:

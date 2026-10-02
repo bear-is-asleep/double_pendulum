@@ -35,7 +35,8 @@ Anything that drives the animator or gif export should implement the `Trajectory
 
 ## Static plots and gifs
 
-`srcs/plots.py` handles matplotlib figures and Pillow gifs. It does not import NiceGUI.
+`srcs/visualization/plots.py` handles trajectory PNG/gif export. It does not import NiceGUI.
+Run metric figures live in `srcs/visualization/eval_figures.py`.
 
 **Time series (PNG)** — three panels per trajectory: sin/cos (not raw θ, so branch cuts do not lie to you), ω₁/ω₂, and PE/KE/total E.
 
@@ -52,21 +53,28 @@ python -m srcs.visualization.plots gif --stage 1 --split test --indices 0 1 --st
 **Training / eval figures** — read run artifacts and write PNGs. These work on empty or toy files so CI can smoke them without a trained model:
 
 ```bash
-python -m srcs.visualization.plots eval --metrics runs/foo/metrics.jsonl --out-dir figures/eval
+python -m srcs.eval --run runs/foo/<run_id> --plot
+python -m srcs.visualization.plots eval --metrics runs/foo/<run_id>/metrics.jsonl
 ```
+
+Eval figure CLI infers sibling `summary.json`, `eval_test/*.npz`, and writes `figures/<run_id>/` (override with `--out-dir`).
 
 Expected inputs:
 
-- `metrics.jsonl` — one JSON object per line; optional keys `epoch` or `global_step`, `train_loss`, `val_loss`
-- `error_vs_t.npz` — keys `t` (1D) and `error` (1D or 2D with one row per stage)
-- `summary.json` — optional `per_stage_mse` or `val_per_stage` dict for a bar chart
+- `metrics.jsonl` — `epoch`, `train_loss` (line), `mean_val_mse` (scatter on training plot)
+- `eval_test/error_vs_t.npz` — `t`, `error` `(n_stage, n_t)`, `stage_ids` (bar chart per stage, not line overlay)
+- `eval_test/channel_mae_vs_t.npz` — per-channel mean |error| vs `t`
+- `eval_test/eval_summary.json` — `test_stage_mse` for summary bars; else `summary.json` `stage_val_mse` filtered by `stages`
 
 ## Layout of Python modules
 
 ```
 srcs/viz.py      SVG + shared CSS (no NiceGUI)
 srcs/sources.py  TrajectorySource, GroundTruthSource, SurrogateSource
-srcs/plots.py    PNG/gif + eval plot helpers + CLI
+srcs/visualization/plots.py   trajectory PNG/gif CLI
+srcs/visualization/eval_figures.py  training/eval metric PNGs
+srcs/eval/pool_eval.py        test-pool NPZ + JSON metrics (CLI: python -m srcs.eval)
+tests/test_metrics.py         pytest for eval metrics and figures
 app.py                      live RK4 UI
 app_data.py                 pool browser UI
 ```

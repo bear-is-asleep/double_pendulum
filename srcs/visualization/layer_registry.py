@@ -64,15 +64,12 @@ class PoolComparisonContext:
   def set_visible(self, layer_id: str, on: bool) -> None:
     self.visible[layer_id] = on
 
-  def palette_index(self, layer_id: str) -> int:
-    if layer_id == STORED_LAYER_ID:
-      return -1
-    for i, s in enumerate(self.surrogates):
-      if s.layer_id() == layer_id:
-        return i
-    return 0
-
-  def svg_layers(self, k: int, *, show_trail: bool) -> tuple[PendulumFrame | None, list[tuple[PendulumFrame, LayerStyle]]]:
+  def svg_layers(
+    self,
+    k: int,
+    *,
+    show_trail: bool,
+  ) -> tuple[PendulumFrame | None, list[tuple[PendulumFrame, LayerStyle]]]:
     p = self.params()
     overlays: list[tuple[PendulumFrame, LayerStyle]] = []
     primary: PendulumFrame | None = None

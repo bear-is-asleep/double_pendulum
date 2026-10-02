@@ -32,12 +32,12 @@ max_mean_unwrap_rate: null
 stage_min: 0
 num_stages: 6
 
-# Fixed gravity for early stages (stages 0–2 use g_zero for 0–1; stage 2 equal mass)
+# Fixed gravity for early stages (stages 0-2 use g_zero for 0-1; stage 2 equal mass)
 g_zero: 0.0
 g_low: 2.0               # stage 3
 g_high: 9.81             # stage 4
 
-# Equal-mass stages (2–5 for both masses; stages 0–1 fix m2 = 0)
+# Equal-mass stages (2-5 for both masses; stages 0-1 fix m2 = 0)
 m_equal: 1.0
 
 # IC boxes [min, max] in radians / rad/s

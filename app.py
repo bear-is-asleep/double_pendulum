@@ -64,42 +64,42 @@ def create_app() -> None:
 
         with ui.column().classes("slider-block"):
           with ui.row().classes("slider-head"):
-            ui.label("θ₁ (degrees)").classes("slider-caption")
+            ui.label("theta1 (degrees)").classes("slider-caption")
             theta1_val = ui.label("135").classes("meta slider-value")
           theta1 = ui.slider(min=0, max=180, value=135, step=1)
         with ui.column().classes("slider-block"):
           with ui.row().classes("slider-head"):
-            ui.label("θ₂ (degrees)").classes("slider-caption")
+            ui.label("theta2 (degrees)").classes("slider-caption")
             theta2_val = ui.label("90").classes("meta slider-value")
           theta2 = ui.slider(min=0, max=180, value=90, step=1)
         with ui.column().classes("slider-block"):
           with ui.row().classes("slider-head"):
-            ui.label("ω₁ (deg/s)").classes("slider-caption")
+            ui.label("omega1 (deg/s)").classes("slider-caption")
             omega1_val = ui.label("0").classes("meta slider-value")
           omega1 = ui.slider(min=-360, max=360, value=0, step=5)
         with ui.column().classes("slider-block"):
           with ui.row().classes("slider-head"):
-            ui.label("ω₂ (deg/s)").classes("slider-caption")
+            ui.label("omega2 (deg/s)").classes("slider-caption")
             omega2_val = ui.label("0").classes("meta slider-value")
           omega2 = ui.slider(min=-360, max=360, value=0, step=5)
         with ui.column().classes("slider-block"):
           with ui.row().classes("slider-head"):
-            ui.label("Mass m₁").classes("slider-caption")
+            ui.label("Mass m1").classes("slider-caption")
             m1_val = ui.label("1.0").classes("meta slider-value")
           m1 = ui.slider(min=0, max=3.0, value=1.0, step=0.1)
         with ui.column().classes("slider-block"):
           with ui.row().classes("slider-head"):
-            ui.label("Mass m₂").classes("slider-caption")
+            ui.label("Mass m2").classes("slider-caption")
             m2_val = ui.label("1.0").classes("meta slider-value")
           m2 = ui.slider(min=0, max=3.0, value=1.0, step=0.1)
         with ui.column().classes("slider-block"):
           with ui.row().classes("slider-head"):
-            ui.label("Length L₁").classes("slider-caption")
+            ui.label("Length L1").classes("slider-caption")
             l1_val = ui.label("1.0").classes("meta slider-value")
           l1 = ui.slider(min=0.4, max=1.6, value=1.0, step=0.1)
         with ui.column().classes("slider-block"):
           with ui.row().classes("slider-head"):
-            ui.label("Length L₂").classes("slider-caption")
+            ui.label("Length L2").classes("slider-caption")
             l2_val = ui.label("1.0").classes("meta slider-value")
           l2 = ui.slider(min=0.4, max=1.6, value=1.0, step=0.1)
         with ui.column().classes("slider-block"):

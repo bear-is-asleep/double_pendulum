@@ -1,9 +1,9 @@
-"""CLI to generate Stage 0–6 ``.npz`` pools under ``data/``.
+"""CLI to generate Stage 0-6 ``.npz`` pools under ``data/``.
 
 Human-owned job: full pool sizes from ``configs/sampler.yaml``. Agents smoke-test
 with tiny ``--train-counts`` / ``--test-counts`` only.
 
-Example (full pools — do not run casually)::
+Example (full pools - do not run casually)::
 
   python -m srcs.simulation.generate_data --data-root data
 

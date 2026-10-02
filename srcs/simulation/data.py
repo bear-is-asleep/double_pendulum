@@ -46,8 +46,10 @@ from srcs.physics.core import (
   PendulumState,
   Trajectory,
   integrate_rk4,
+  wrap_angle
 )
 from srcs.simulation.sampler import SampleRow, sample
+from srcs.utils.paths import ensure_parent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -285,17 +287,12 @@ def list_pools(data_root: Path | str) -> list[tuple[int, str, Path]]:
   return found
 
 
-def _wrap_angles(theta: NDArray[np.float64]) -> NDArray[np.float64]:
-  """Vectorized wrap to (-pi, pi] (same rule as ``wrap_angle``)."""
-  return (theta + np.pi) % (2.0 * np.pi) - np.pi
-
-
 def _traj_to_wrapped_arrays(
   traj: Trajectory,
 ) -> dict[str, NDArray[np.float64]]:
   """Wrap angles, build sin/cos + omega + energy series for one traj."""
-  th1 = _wrap_angles(traj.theta1)
-  th2 = _wrap_angles(traj.theta2)
+  th1 = wrap_angle(traj.theta1)
+  th2 = wrap_angle(traj.theta2)
   return {
     "theta1": th1,
     "theta2": th2,
@@ -516,7 +513,7 @@ def save_pool(
         "pass overwrite_frozen=True only if you mean it"
       )
 
-  path.parent.mkdir(parents=True, exist_ok=True)
+  ensure_parent_dir(path)
   np.savez_compressed(
     path,
     stage=np.int32(pool.stage),

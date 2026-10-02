@@ -5,26 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import yaml
+from srcs.utils.yaml_io import read_mapping
 
 _CONFIG_ROOT = Path(__file__).resolve().parent.parent / "configs"
 _MODELS_DIR = _CONFIG_ROOT / "models"
 _SMOKE_DIR = _CONFIG_ROOT / "smoke"
 
 
-def _read_yaml(path: Path) -> dict[str, Any]:
-  with path.open(encoding="utf-8") as f:
-    data = yaml.safe_load(f)
-  if data is None:
-    return {}
-  if not isinstance(data, dict):
-    raise TypeError(f"Expected mapping at root of {path}, got {type(data).__name__}")
-  return data
-
-
 def load_sampler_config(path: Path | None = None) -> dict[str, Any]:
   """Shared stage bounds, safety, IC boxes, pool sizes."""
-  return _read_yaml(path or (_CONFIG_ROOT / "sampler.yaml"))
+  return read_mapping(path or (_CONFIG_ROOT / "sampler.yaml"))
 
 
 def load_model_config(
@@ -36,8 +26,8 @@ def load_model_config(
   model_name: baseline | curriculum | active | progressive (no .yaml).
   """
   root = models_dir or _MODELS_DIR
-  base = _read_yaml(root / "base.yaml")
-  overlay = _read_yaml(root / f"{model_name}.yaml")
+  base = read_mapping(root / "base.yaml")
+  overlay = read_mapping(root / f"{model_name}.yaml")
   merged = {**base, **overlay}
   if "name" not in merged:
     raise KeyError(f"Model config {model_name} missing 'name' after merge")
@@ -55,7 +45,7 @@ def list_model_configs(models_dir: Path | None = None) -> list[str]:
 def load_baseline_lock(path: Path | None = None) -> dict[str, Any]:
   """Step 5 locked width/depth/k/LR/batch (experiments 1-4 must reuse)."""
   lock_path = path or (_CONFIG_ROOT / "baseline_lock.yaml")
-  return _read_yaml(lock_path)
+  return read_mapping(lock_path)
 
 
 def list_smoke_presets(smoke_dir: Path | None = None) -> list[str]:
@@ -74,7 +64,7 @@ def load_smoke_preset(
   if not path.is_file():
     known = ", ".join(list_smoke_presets(root)) or "(none)"
     raise FileNotFoundError(f"unknown smoke preset {name!r}; known: {known}")
-  preset = _read_yaml(path)
+  preset = read_mapping(path)
   if preset.get("name") != name:
     raise KeyError(f"{path}: 'name' must be {name!r}, got {preset.get('name')!r}")
   for key in ("data_root", "runs_root", "run_id", "stages", "data", "train"):

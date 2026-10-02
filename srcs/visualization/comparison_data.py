@@ -7,7 +7,21 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
+from srcs.simulation.data import TrajectoryView
 from srcs.visualization.sources import GroundTruthSource
+
+# Pool columns copied into chart series. Order matches PlaybackSeries fields.
+_VIEW_COLUMNS = (
+  "sin_theta1",
+  "cos_theta1",
+  "sin_theta2",
+  "cos_theta2",
+  "omega1",
+  "omega2",
+  "potential",
+  "kinetic",
+  "energy",
+)
 
 
 @dataclass(frozen=True)
@@ -37,7 +51,7 @@ class LayerSeries:
     return self.trace_colors[field]
 
 
-# Stored reference: θ1 cool, θ2 warm; energy purple / green.
+# Stored reference: theta1 cool, theta2 warm; energy purple / green.
 CHART_REF_COLORS: dict[str, str] = {
   "sin_theta1": "#1d4ed8",
   "sin_theta2": "#dc2626",
@@ -47,7 +61,7 @@ CHART_REF_COLORS: dict[str, str] = {
   "kinetic": "#059669",
 }
 
-# Per loaded checkpoint (high contrast pairs for θ1 vs θ2).
+# Per loaded checkpoint (high contrast pairs for theta1 vs theta2).
 CHART_LAYER_COLOR_SETS: list[dict[str, str]] = [
   {
     "sin_theta1": "#c2410c",
@@ -84,15 +98,23 @@ CHART_LAYER_COLOR_SETS: list[dict[str, str]] = [
 ]
 
 
+def pool_series_arrays(view: TrajectoryView) -> dict[str, NDArray[np.float64]]:
+  """Float64 time plus labeled pool columns. One copy path for every chart."""
+  columns = {"t": np.asarray(view.t, dtype=np.float64)}
+  for name in _VIEW_COLUMNS:
+    columns[name] = np.asarray(getattr(view, name), dtype=np.float64)
+  return columns
+
+
 def reference_from_ground_truth(src: GroundTruthSource) -> ReferenceSeries:
-  v = src.view
-  t = np.asarray(v.t, dtype=np.float64)
+  """Stored sin, omega, and PE/KE. Cos and total energy stay off this chart."""
+  columns = pool_series_arrays(src.view)
   return ReferenceSeries(
-    t=t,
-    sin_theta1=np.asarray(v.sin_theta1, dtype=np.float64),
-    sin_theta2=np.asarray(v.sin_theta2, dtype=np.float64),
-    omega1=np.asarray(v.omega1, dtype=np.float64),
-    omega2=np.asarray(v.omega2, dtype=np.float64),
-    potential=np.asarray(v.potential, dtype=np.float64),
-    kinetic=np.asarray(v.kinetic, dtype=np.float64),
+    t=columns["t"],
+    sin_theta1=columns["sin_theta1"],
+    sin_theta2=columns["sin_theta2"],
+    omega1=columns["omega1"],
+    omega2=columns["omega2"],
+    potential=columns["potential"],
+    kinetic=columns["kinetic"],
   )

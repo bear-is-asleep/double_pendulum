@@ -1,2 +1,5 @@
 name: curriculum_ann
 strategy: curriculum
+
+# Per curriculum stage; defaults to base max_epochs when omitted
+max_epochs_per_stage: 200

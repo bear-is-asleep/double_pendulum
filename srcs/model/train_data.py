@@ -1,7 +1,7 @@
 """Pointwise train/val tensors from ``.npz`` pools (stride k is train-time only).
 
-X columns match ``PoolData.pointwise``: ``(t, IC angles/ω, m1, m2, g)`` — length ``l`` omitted.
-Y columns: six sin/cos + ω heads used by the surrogate loss.
+X columns match ``PoolData.pointwise``: ``(t, IC angles/omega, m1, m2, g)`` - length ``l`` omitted.
+Y columns: six sin/cos + omega heads used by the surrogate loss.
 """
 
 from __future__ import annotations

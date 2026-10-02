@@ -7,51 +7,24 @@ from typing import Any
 
 import numpy as np
 import torch
-import yaml
 from numpy.typing import NDArray
 from torch import nn
 
 from srcs.model.mlp import build_mlp
+from srcs.utils.paths import (
+  load_run_config,
+  resolve_checkpoint_file,
+  resolve_run_dir,
+)
 
-
-def resolve_run_dir(checkpoint_path: Path | str) -> Path:
-  """Accept run root, ``checkpoints/best.pt``, or ``.../best.pt``."""
-  path = Path(checkpoint_path).resolve()
-  if path.is_file():
-    if path.parent.name == "checkpoints":
-      return path.parent.parent
-    return path.parent
-  if (path / "checkpoints" / "best.pt").is_file():
-    return path
-  if (path / "config.yaml").is_file():
-    return path
-  raise FileNotFoundError(f"cannot resolve run dir from {checkpoint_path!r}")
-
-
-def resolve_checkpoint_file(checkpoint_path: Path | str) -> Path:
-  path = Path(checkpoint_path).resolve()
-  if path.is_file() and path.suffix == ".pt":
-    return path
-  run = resolve_run_dir(path)
-  best = run / "checkpoints" / "best.pt"
-  if best.is_file():
-    return best
-  last = run / "checkpoints" / "last.pt"
-  if last.is_file():
-    return last
-  raise FileNotFoundError(f"no .pt checkpoint under {run}")
-
-
-def _load_run_config(run_dir: Path, ckpt_cfg: Any) -> dict[str, Any]:
-  if isinstance(ckpt_cfg, dict) and ckpt_cfg.get("input_dim"):
-    return dict(ckpt_cfg)
-  yaml_path = run_dir / "config.yaml"
-  if yaml_path.is_file():
-    with yaml_path.open(encoding="utf-8") as f:
-      data = yaml.safe_load(f)
-    if isinstance(data, dict):
-      return data
-  raise ValueError(f"no rebuildable config in checkpoint or {yaml_path}")
+__all__ = [
+  "build_pointwise_inputs",
+  "load_model_from_checkpoint",
+  "predict_at_times",
+  "predict_one",
+  "resolve_checkpoint_file",
+  "resolve_run_dir",
+]
 
 
 def build_pointwise_inputs(
@@ -92,7 +65,7 @@ def load_model_from_checkpoint(
   ckpt = torch.load(ckpt_file, map_location=device, weights_only=True)
   if not isinstance(ckpt, dict) or "model_state_dict" not in ckpt:
     raise KeyError(f"{ckpt_file}: expected dict with model_state_dict")
-  cfg = _load_run_config(run_dir, ckpt.get("config"))
+  cfg = load_run_config(run_dir, ckpt.get("config"))
   model = build_mlp(cfg)
   model.load_state_dict(ckpt["model_state_dict"])
   model.to(device)

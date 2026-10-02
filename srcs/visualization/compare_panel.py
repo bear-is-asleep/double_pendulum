@@ -9,7 +9,11 @@ from typing import Callable
 from nicegui import ui
 
 from srcs.visualization.layer_registry import PoolComparisonContext
-from srcs.visualization.live_timeseries import DisplayMode, LiveTimeseriesChart
+from srcs.visualization.live_timeseries import (
+  DisplayMode,
+  LiveTimeseriesChart,
+  series_from_ground_truth,
+)
 from srcs.visualization.surrogate import STORED_LAYER_ID, SurrogateSource
 
 
@@ -30,8 +34,6 @@ class PoolComparisonUI:
     if self.ctx.surrogates:
       self.chart.load_comparison(self.ctx)
     else:
-      from srcs.visualization.live_timeseries import series_from_ground_truth
-
       self.chart.load(series_from_ground_truth(self.ctx.stored))
     mode = self.display_mode
     if mode == "errors" and not self.ctx.surrogates:
@@ -139,7 +141,7 @@ def attach_pool_comparison_panel(
     comp_ui.sync_layer_switches()
 
     mode_sel = ui.select(
-      {"values": "Chart: values", "errors": "Chart: errors (stored − NN)"},
+      {"values": "Chart: values", "errors": "Chart: errors (stored - NN)"},
       value="values",
       label="Time series mode",
     )

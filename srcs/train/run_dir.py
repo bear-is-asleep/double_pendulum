@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -11,11 +9,30 @@ import torch
 import yaml
 from torch import nn, optim
 
+from srcs.utils.json_io import append_jsonl_line, write_json
+from srcs.utils.time import utc_now_iso
 
-def baseline_run_id(cfg: dict[str, Any], *, tag: str | None = None) -> str:
-  """Filesystem-safe id encoding architecture + train knobs that differ."""
+__all__ = [
+  "append_metrics_jsonl",
+  "baseline_run_id",
+  "curriculum_run_id",
+  "init_run_dir",
+  "save_checkpoint",
+  "strategy_run_id",
+  "utc_now_iso",
+  "write_summary",
+]
+
+
+def strategy_run_id(
+  cfg: dict[str, Any],
+  strategy: str,
+  *,
+  tag: str | None = None,
+) -> str:
+  """Filesystem-safe id: strategy + locked architecture / train knobs."""
   parts = [
-    "baseline",
+    strategy,
     f"w{int(cfg['hidden_width'])}",
     f"d{int(cfg['hidden_depth'])}",
     f"k{int(cfg['subsample_stride_k'])}",
@@ -24,6 +41,14 @@ def baseline_run_id(cfg: dict[str, Any], *, tag: str | None = None) -> str:
   if tag:
     parts.append(tag)
   return "_".join(parts)
+
+
+def baseline_run_id(cfg: dict[str, Any], *, tag: str | None = None) -> str:
+  return strategy_run_id(cfg, "baseline", tag=tag)
+
+
+def curriculum_run_id(cfg: dict[str, Any], *, tag: str | None = None) -> str:
+  return strategy_run_id(cfg, "curriculum", tag=tag)
 
 
 def init_run_dir(runs_root: Path | str, run_id: str, cfg: dict[str, Any]) -> Path:
@@ -37,9 +62,7 @@ def init_run_dir(runs_root: Path | str, run_id: str, cfg: dict[str, Any]) -> Pat
 
 
 def append_metrics_jsonl(run_dir: Path, record: dict[str, Any]) -> None:
-  path = run_dir / "metrics.jsonl"
-  with path.open("a", encoding="utf-8") as f:
-    f.write(json.dumps(record, sort_keys=True) + "\n")
+  append_jsonl_line(run_dir / "metrics.jsonl", record, sort_keys=True)
 
 
 def save_checkpoint(
@@ -66,10 +89,4 @@ def save_checkpoint(
 
 
 def write_summary(run_dir: Path, summary: dict[str, Any]) -> None:
-  with (run_dir / "summary.json").open("w", encoding="utf-8") as f:
-    json.dump(summary, f, indent=2, sort_keys=True)
-    f.write("\n")
-
-
-def utc_now_iso() -> str:
-  return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+  write_json(run_dir / "summary.json", summary, sort_keys=True)

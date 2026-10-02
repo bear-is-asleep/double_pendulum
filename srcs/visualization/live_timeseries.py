@@ -10,11 +10,11 @@ import plotly.graph_objects as go
 from numpy.typing import NDArray
 from plotly.subplots import make_subplots
 
-from srcs.physics.core import cartesian
 from srcs.visualization.comparison_data import (
   CHART_REF_COLORS,
   LayerSeries,
   ReferenceSeries,
+  pool_series_arrays,
 )
 from srcs.visualization.layer_registry import PoolComparisonContext
 from srcs.visualization.sources import GroundTruthSource
@@ -38,34 +38,8 @@ class PlaybackSeries:
 
 
 def series_from_ground_truth(src: GroundTruthSource) -> PlaybackSeries:
-  """
-  Build plot arrays from stored pool labels.
-  """
-  v = src.view
-  t = np.asarray(v.t, dtype=np.float64)
-  return PlaybackSeries(
-    t=t,
-    sin_theta1=np.asarray(v.sin_theta1, dtype=np.float64),
-    cos_theta1=np.asarray(v.cos_theta1, dtype=np.float64),
-    sin_theta2=np.asarray(v.sin_theta2, dtype=np.float64),
-    cos_theta2=np.asarray(v.cos_theta2, dtype=np.float64),
-    omega1=np.asarray(v.omega1, dtype=np.float64),
-    omega2=np.asarray(v.omega2, dtype=np.float64),
-    potential=np.asarray(v.potential, dtype=np.float64),
-    kinetic=np.asarray(v.kinetic, dtype=np.float64),
-    energy=np.asarray(v.energy, dtype=np.float64),
-  )
-
-
-def precompute_tip_positions(src: GroundTruthSource) -> list[tuple[float, float]]:
-  """Lower-bob (x2, y2) at every frame; built once per trajectory selection."""
-  p = src.params()
-  n = src.n_frames()
-  tips: list[tuple[float, float]] = []
-  for i in range(n):
-    _, _, x2, y2 = cartesian(src.frame_state(i), p)
-    tips.append((x2, y2))
-  return tips
+  """Build plot arrays from stored pool labels."""
+  return PlaybackSeries(**pool_series_arrays(src.view))
 
 
 def _ylim_pad(y: NDArray[np.float64], pad_frac: float = 0.05) -> tuple[float, float]:
@@ -88,28 +62,115 @@ class ComparisonChartState:
   display_mode: DisplayMode = "values"
 
 
+@dataclass(frozen=True)
+class ChartTrace:
+  """One Plotly line. ``y`` is the full series; playback slices it."""
+
+  row: int
+  name: str
+  layer_key: str
+  y: NDArray[np.float64]
+  color: str
+  dash: str
+  visible: bool
+
+
+# (subplot row, series attribute, legend stem)
+_PANELS: tuple[tuple[int, str, str], ...] = (
+  (1, "sin_theta1", "sin theta1"),
+  (1, "sin_theta2", "sin theta2"),
+  (2, "omega1", "omega1"),
+  (2, "omega2", "omega2"),
+  (3, "potential", "PE"),
+  (3, "kinetic", "KE"),
+)
+
+_ROW_FIELDS: dict[int, tuple[str, str]] = {
+  1: ("sin_theta1", "sin_theta2"),
+  2: ("omega1", "omega2"),
+  3: ("potential", "kinetic"),
+}
+
+
+def _field_y(
+  state: ComparisonChartState,
+  field: str,
+  layer: LayerSeries | None,
+) -> NDArray[np.float64]:
+  """Stored series, model series, or stored minus model when mode is errors."""
+  ref_y = getattr(state.ref, field)
+  if layer is None:
+    return ref_y
+  pred_y = getattr(layer, field)
+  if state.display_mode == "errors":
+    return ref_y - pred_y
+  return pred_y
+
+
+def chart_traces(state: ComparisonChartState) -> list[ChartTrace]:
+  """Trace order shared by figure build and frame slicing."""
+  show_ref = state.visible.get(STORED_LAYER_ID, True)
+  values_mode = state.display_mode == "values"
+  specs: list[ChartTrace] = []
+  for row, field, label in _PANELS:
+    if values_mode and show_ref:
+      specs.append(ChartTrace(
+        row=row,
+        name=f"{label} (stored)",
+        layer_key="ref",
+        y=_field_y(state, field, None),
+        color=CHART_REF_COLORS[field],
+        dash="solid",
+        visible=True,
+      ))
+    for ly in state.layers:
+      if values_mode:
+        name = f"{label} ({ly.label})"
+        dash = "dash"
+      else:
+        name = f"{label} delta ({ly.label})"
+        dash = "solid"
+      specs.append(ChartTrace(
+        row=row,
+        name=name,
+        layer_key=ly.layer_id,
+        y=_field_y(state, field, ly),
+        color=ly.color_for(field),
+        dash=dash,
+        visible=state.visible.get(ly.layer_id, True),
+      ))
+  return specs
+
+
+def _ylim_chunks(state: ComparisonChartState) -> dict[int, list[NDArray[np.float64]]]:
+  """Y samples that set each subplot range. Hidden layers stay out of the range."""
+  show_ref = state.visible.get(STORED_LAYER_ID, True)
+  values_mode = state.display_mode == "values"
+  chunks: dict[int, list[NDArray[np.float64]]] = {row: [] for row in _ROW_FIELDS}
+  for row, fields in _ROW_FIELDS.items():
+    for field in fields:
+      if values_mode and show_ref:
+        chunks[row].append(_field_y(state, field, None))
+      for ly in state.layers:
+        if not state.visible.get(ly.layer_id, True):
+          continue
+        chunks[row].append(_field_y(state, field, ly))
+  return chunks
+
+
 class LiveTimeseriesChart:
   """
-  Three stacked Plotly panels: sin θ1/θ2, ω, PE/KE.
+  Three stacked Plotly panels: sin theta1/theta2, omega, PE/KE.
 
   Supports stored reference + optional NN layers (values or residuals).
   """
-
-  REF_DASH = "solid"
-
-  def _ref_color(self, field: str) -> str:
-    return CHART_REF_COLORS[field]
-
-  def _layer_color(self, layer: LayerSeries, field: str) -> str:
-    return layer.color_for(field)
 
   def __init__(self, plotly_element) -> None:
     self._el = plotly_element
     self._fig: go.Figure | None = None
     self._state: ComparisonChartState | None = None
     self._last_frame: int | None = None
-    # trace index map: list of (row, name, layer_id | "ref", field)
-    self._trace_map: list[tuple[int, str, str, str]] = []
+    self._trace_map: list[ChartTrace] = []
 
   def load_comparison(self, ctx: PoolComparisonContext) -> None:
     ref = ctx.reference_series()
@@ -147,8 +208,8 @@ class LiveTimeseriesChart:
     self._state.visible[layer_id] = visible
     if self._fig is None:
       return
-    for idx, (_row, _name, lid, _field) in enumerate(self._trace_map):
-      if lid == layer_id or (lid == "ref" and layer_id == STORED_LAYER_ID):
+    for idx, spec in enumerate(self._trace_map):
+      if spec.layer_key == layer_id or (spec.layer_key == "ref" and layer_id == STORED_LAYER_ID):
         self._fig.data[idx].visible = visible
     self._el.update_figure(self._fig)
 
@@ -172,94 +233,28 @@ class LiveTimeseriesChart:
       return
 
     t0, t1 = float(t[0]), float(t[-1])
-    mode = state.display_mode
-    show_ref = state.visible.get(STORED_LAYER_ID, True)
-    compare_layers = [
-      ly for ly in state.layers if state.visible.get(ly.layer_id, True)
-    ]
-
-    def add_trace(row: int, name: str, layer_key: str, yfull: NDArray[np.float64], *, color: str, dash: str) -> None:
+    specs = chart_traces(state)
+    self._trace_map = specs
+    for spec in specs:
       fig.add_trace(
         go.Scatter(
           x=[],
           y=[],
           mode="lines",
-          name=name,
-          line={"color": color, "width": 1.5, "dash": dash},
-          visible=state.visible.get(layer_key, True) if layer_key != "ref" else show_ref,
+          name=spec.name,
+          line={"color": spec.color, "width": 1.5, "dash": spec.dash},
+          visible=spec.visible,
         ),
-        row=row,
+        row=spec.row,
         col=1,
       )
-      self._trace_map.append((row, name, layer_key, ""))
 
-    # Panel fields: (row, field_name, short label)
-    panels = [
-      (1, "sin_theta1", "sin θ1"),
-      (1, "sin_theta2", "sin θ2"),
-      (2, "omega1", "ω1"),
-      (2, "omega2", "ω2"),
-      (3, "potential", "PE"),
-      (3, "kinetic", "KE"),
-    ]
-
-    for row, field, label in panels:
-      ref_y = getattr(state.ref, field)
-      if mode == "values":
-        if show_ref:
-          add_trace(
-            row,
-            f"{label} (stored)",
-            "ref",
-            ref_y,
-            color=self._ref_color(field),
-            dash=self.REF_DASH,
-          )
-        for ly in state.layers:
-          ly_y = getattr(ly, field)
-          add_trace(
-            row,
-            f"{label} ({ly.label})",
-            ly.layer_id,
-            ly_y,
-            color=self._layer_color(ly, field),
-            dash="dash",
-          )
-      else:
-        for ly in state.layers:
-          ly_y = getattr(ly, field)
-          err = ref_y - ly_y
-          add_trace(
-            row,
-            f"{label} Δ ({ly.label})",
-            ly.layer_id,
-            err,
-            color=self._layer_color(ly, field),
-            dash="solid",
-          )
-
-    row_fields = {
-      1: ["sin_theta1", "sin_theta2"],
-      2: ["omega1", "omega2"],
-      3: ["potential", "kinetic"],
-    }
-    for row, fields in row_fields.items():
-      chunks: list[NDArray[np.float64]] = []
-      if mode == "values" and show_ref:
-        for f in fields:
-          chunks.append(getattr(state.ref, f))
-      for ly in compare_layers:
-        for f in fields:
-          ly_y = getattr(ly, f)
-          if mode == "values":
-            chunks.append(ly_y)
-          else:
-            chunks.append(getattr(state.ref, f) - ly_y)
+    for row, chunks in _ylim_chunks(state).items():
       if chunks:
         fig.update_yaxes(range=_ylim_pad(np.concatenate(chunks)), row=row, col=1)
 
     fig.update_xaxes(range=[t0, t1], row=3, col=1)
-    fig.update_yaxes(title_text="sin θ", row=1, col=1)
+    fig.update_yaxes(title_text="sin theta", row=1, col=1)
     fig.update_yaxes(title_text="omega (rad/s)", row=2, col=1)
     fig.update_yaxes(title_text="energy", row=3, col=1)
     fig.update_layout(
@@ -287,39 +282,7 @@ class LiveTimeseriesChart:
     self._last_frame = k
     end = k + 1
     tx = t[:end]
-
-    trace_i = 0
-    state = self._state
-    mode = state.display_mode
-    show_ref = state.visible.get(STORED_LAYER_ID, True)
-
-    panels = [
-      ("sin_theta1",),
-      ("sin_theta2",),
-      ("omega1",),
-      ("omega2",),
-      ("potential",),
-      ("kinetic",),
-    ]
-
-    for field_tuple in panels:
-      field = field_tuple[0]
-      ref_y = getattr(state.ref, field)
-      if mode == "values":
-        if show_ref:
-          self._fig.data[trace_i].x = tx
-          self._fig.data[trace_i].y = ref_y[:end]
-          trace_i += 1
-        for ly in state.layers:
-          ly_y = getattr(ly, field)
-          self._fig.data[trace_i].x = tx
-          self._fig.data[trace_i].y = ly_y[:end]
-          trace_i += 1
-      else:
-        for ly in state.layers:
-          ly_y = getattr(ly, field)
-          self._fig.data[trace_i].x = tx
-          self._fig.data[trace_i].y = (ref_y - ly_y)[:end]
-          trace_i += 1
-
+    for idx, spec in enumerate(self._trace_map):
+      self._fig.data[idx].x = tx
+      self._fig.data[idx].y = spec.y[:end]
     self._el.update_figure(self._fig)

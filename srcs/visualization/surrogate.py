@@ -9,18 +9,20 @@ import numpy as np
 from numpy.typing import NDArray
 
 from srcs.model.checkpoint import load_model_from_checkpoint, predict_at_times
+from srcs.model.targets import decode_pred_row
 from srcs.physics.core import PendulumParams, PendulumState, cartesian, kinetic_energy, potential_energy
 from srcs.simulation.data import TrajectoryView
 
 
-def decode_pred_row(row: NDArray[np.float64]) -> PendulumState:
-  """Six-head row -> angles via atan2 and omega heads."""
-  return PendulumState(
-    theta1=float(np.arctan2(row[0], row[1])),
-    theta2=float(np.arctan2(row[2], row[3])),
-    omega1=float(row[4]),
-    omega2=float(row[5]),
-  )
+def state_on_pred_grid(
+  pred: NDArray[np.float64],
+  view: TrajectoryView,
+  index: int,
+) -> PendulumState:
+  """Frame 0 is the stored IC so every arm starts on the same pose."""
+  if index == 0:
+    return view.frame_at(0)
+  return decode_pred_row(pred[index])
 
 
 def series_from_pred(
@@ -115,11 +117,11 @@ class SurrogateSource:
     return pred
 
   def frame_state(self, k: int, view: TrajectoryView, cache_key: tuple) -> PendulumState:
-    # Pool IC matches stored frame 0; anchor SVG so all arms start aligned.
+    # Stored IC needs no checkpoint. Later frames decode the prediction grid.
     if k == 0:
       return view.frame_at(0)
     pred = self.predict_series(view, cache_key)
-    return decode_pred_row(pred[k])
+    return state_on_pred_grid(pred, view, k)
 
   def tip_trail(
     self,
@@ -132,8 +134,7 @@ class SurrogateSource:
       pred = self.predict_series(view, cache_key)
       tips: list[tuple[float, float]] = []
       for i in range(pred.shape[0]):
-        state = view.frame_at(0) if i == 0 else decode_pred_row(pred[i])
-        _, _, x2, y2 = cartesian(state, params)
+        _, _, x2, y2 = cartesian(state_on_pred_grid(pred, view, i), params)
         tips.append((x2, y2))
       self._tips = tips
     return self._tips[: k + 1]

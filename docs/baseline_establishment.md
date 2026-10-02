@@ -17,7 +17,8 @@ Lock **FC width, depth, train subsample k, LR, batch** before curriculum / activ
 | `srcs/train/epoch.py`                | Shared train/eval epoch helpers (Step 9 reuses)     |
 | `srcs/train/baseline.py`             | One trial train + per-stage val + `runs/` artifacts |
 | `srcs/train/baseline_search.py`      | CLI grid search → updates lock file                 |
-| `srcs/train/baseline_smoke.py`       | Train from ``configs/smoke/*.yaml`` (pools on disk)   |
+| `srcs/train/__main__.py`             | ``python -m srcs.train`` (``--smoke`` presets)        |
+| `srcs/train/registry.py`             | Model YAML stem → trainer class                       |
 
 
 ## Human workflow
@@ -42,27 +43,30 @@ Each trial writes `runs/<run_id>/` with `config.yaml`, `metrics.jsonl`, `summary
 | --- | --- | --- |
 | Unit smoke | `python -m pytest tests/test_baseline.py -q` | Under ~10 s |
 | Data | `python -m srcs.simulation.generate_smoke_data small` | Under ~30 s |
-| Train | `python -m srcs.train.baseline_smoke small --force` | Under ~30 s |
+| Train | `python -m srcs.train --smoke small --force` | Under ~30 s |
 | Sanity data | `python -m srcs.simulation.generate_smoke_data sanity` | ~1–2 min |
-| Sanity train | `python -m srcs.train.baseline_smoke sanity --force` | ~3–8 min CPU |
+| Sanity train | `python -m srcs.train --smoke sanity --force` | ~3–8 min CPU |
 
 ```bash
 python -m pytest tests/test_baseline.py -q
 
 python -m srcs.simulation.generate_smoke_data small
-python -m srcs.train.baseline_smoke small --force
+python -m srcs.train --smoke small --force
 
 python -m srcs.simulation.generate_smoke_data sanity
-python -m srcs.train.baseline_smoke sanity --force
+python -m srcs.train --smoke sanity --force
+python -m srcs.train --smoke sanity --model curriculum --force
 ```
 
 Plots (separate from train):
 
 ```bash
+# Export test metrics into runs/<run_id>/eval_test/ (optional --plot -> figures/<run_id>/)
+python -m srcs.eval --run runs/baseline_small/baseline_w512_d2_k4_seed0_5m --plot
+
+# Figures from metrics.jsonl only (paths + figures/<run_id>/ inferred)
 python -m srcs.visualization.plots eval \
-  --metrics runs/baseline_small/baseline_w64_d2_k4_seed0_5m/metrics.jsonl \
-  --val-key mean_val_mse \
-  --out-dir figures/baseline_small
+  --metrics runs/baseline_small/baseline_w512_d2_k4_seed0_5m/metrics.jsonl
 ```
 
 `small` preset uses `val_fraction=0.25` so tiny val pools are non-empty. Full grid search:

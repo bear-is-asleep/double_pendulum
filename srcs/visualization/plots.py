@@ -1,4 +1,4 @@
-"""Matplotlib/Pillow plotting and run-metric figures.
+"""Matplotlib/Pillow exports for dataset trajectories (not run metrics).
 
 Ground-truth plots read ``TrajectoryView`` / ``TrajectorySource`` objects.
 Batch helpers discover pools under a ``data_root`` via ``data.list_pools``.
@@ -7,12 +7,10 @@ Command-line entry points (run from repo root)::
 
   python -m srcs.visualization.plots timeseries --data-root data --stage 1
   python -m srcs.visualization.plots gif --stage 1 --split test --indices 0
-  python -m srcs.visualization.plots eval --metrics path/to/metrics.jsonl --out-dir figures/eval
 
-The ``eval`` subcommand renders training curves, error-vs-time, and per-stage
-summary bars from JSON/JSONL/NPZ files produced during training and evaluation.
-It tolerates missing or empty inputs (placeholder axes) so tests can run without
-a full training run.
+Run metric figures (``srcs.visualization.eval_figures``)::
+
+  python -m srcs.visualization.plots eval --metrics runs/.../<run_id>/metrics.jsonl
 
 Gifs raster frames with matplotlib rather than parsing SVG, keeping dependencies
 limited to what is already in ``requirements.txt``.
@@ -21,7 +19,6 @@ limited to what is already in ``requirements.txt``.
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib
@@ -35,14 +32,8 @@ from PIL import Image
 from srcs.simulation.data import TrajectoryView, list_pools, open_pool
 from srcs.physics import cartesian
 from srcs.visualization.sources import GroundTruthSource, TrajectorySource
+from srcs.visualization.mpl_io import prepare_out, write_fig
 from srcs.visualization.viz import PendulumFrame, build_svg
-
-
-def energy_drift_scalar(energy: NDArray[np.float64]) -> float:
-  """Same metric as ``GroundTruthSource.energy_drift_max`` for raw energy arrays."""
-  if energy.size == 0:
-    return 0.0
-  return float(np.max(np.abs(energy - energy[0])))
 
 
 def plot_trajectory_timeseries(
@@ -57,8 +48,7 @@ def plot_trajectory_timeseries(
   Row 1 plots sin/cos of both angles (training targets). Row 2 plots omega1, omega2.
   Row 3 plots potential, kinetic, and total energy stored in the pool.
   """
-  out = Path(out_path)
-  out.parent.mkdir(parents=True, exist_ok=True)
+  out = prepare_out(out_path)
   t = view.t
   fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
   ax_sc, ax_w, ax_e = axes
@@ -87,10 +77,7 @@ def plot_trajectory_timeseries(
 
   if title:
     fig.suptitle(title)
-  fig.tight_layout()
-  fig.savefig(out, dpi=120)
-  plt.close(fig)
-  return out
+  return write_fig(fig, out)
 
 
 def plot_pools_timeseries(
@@ -184,8 +171,7 @@ def write_trajectory_gif(
 
   ``duration_ms`` is the display time per frame in milliseconds (Pillow convention).
   """
-  out = Path(out_path)
-  out.parent.mkdir(parents=True, exist_ok=True)
+  out = prepare_out(out_path)
   frames: list[Image.Image] = []
   n = source.n_frames()
   for k in range(0, n, max(1, stride)):
@@ -224,135 +210,6 @@ def export_gif_batch(
     write_trajectory_gif(src, path, stride=stride)
     paths.append(path)
   return paths
-
-
-def load_metrics_jsonl(path: Path | str) -> list[dict]:
-  """Parse newline-delimited JSON training logs; returns [] if file missing or empty."""
-  rows: list[dict] = []
-  p = Path(path)
-  if not p.is_file() or p.stat().st_size == 0:
-    return rows
-  with p.open(encoding="utf-8") as f:
-    for line in f:
-      line = line.strip()
-      if not line:
-        continue
-      rows.append(json.loads(line))
-  return rows
-
-
-def plot_training_curves(
-  metrics_path: Path | str,
-  out_path: Path | str,
-  *,
-  val_key: str = "val_loss",
-  train_key: str = "train_loss",
-) -> Path:
-  """
-  Plot ``train_key`` and ``val_key`` vs epoch (or ``global_step`` fallback).
-
-  Missing keys are skipped. An empty log file still writes a PNG with a message.
-  """
-  out = Path(out_path)
-  out.parent.mkdir(parents=True, exist_ok=True)
-  rows = load_metrics_jsonl(metrics_path)
-  fig, ax = plt.subplots(figsize=(8, 4))
-  if not rows:
-    ax.text(0.5, 0.5, "no metrics", ha="center", va="center", transform=ax.transAxes)
-    ax.set_title("training curves (empty fixture)")
-  else:
-    x = [r.get("epoch", r.get("global_step", i)) for i, r in enumerate(rows)]
-    if any(train_key in r for r in rows):
-      y_train = [r.get(train_key) for r in rows]
-      ax.plot(x, y_train, label=train_key, color="#2f6f8f")
-    if any(val_key in r for r in rows):
-      y_val = [r.get(val_key) for r in rows]
-      ax.plot(x, y_val, label=val_key, color="#c45c26")
-    ax.set_xlabel("epoch / step")
-    ax.set_ylabel("loss")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-  fig.tight_layout()
-  fig.savefig(out, dpi=120)
-  plt.close(fig)
-  return out
-
-
-def plot_error_vs_t(
-  error_npz: Path | str,
-  out_path: Path | str,
-  *,
-  stage: int | None = None,
-) -> Path:
-  """
-  Plot mean prediction loss vs time.
-
-  NPZ layout:
-    * ``t`` - shape ``(n_t,)``
-    * ``error`` - shape ``(n_t,)`` for a single curve, or ``(n_stage, n_t)`` for one
-      curve per curriculum stage (row ``s`` corresponds to stage id ``s``, ids 0..6).
-  """
-  out = Path(out_path)
-  out.parent.mkdir(parents=True, exist_ok=True)
-  p = Path(error_npz)
-  fig, ax = plt.subplots(figsize=(8, 4))
-  if not p.is_file():
-    ax.text(0.5, 0.5, "missing error file", ha="center", va="center", transform=ax.transAxes)
-  else:
-    data = np.load(p)
-    t = data["t"]
-    err = data["error"]
-    if err.ndim == 2:
-      if stage is not None:
-        # stage id 0..6 in row index stage (when error rows align with ids)
-        row = int(stage)
-        if 0 <= row < err.shape[0]:
-          ax.plot(t, err[row], label=f"stage {stage}")
-        else:
-          ax.plot(t, err[0], label="stage 0 (fallback)")
-      else:
-        for i in range(err.shape[0]):
-          ax.plot(t, err[i], label=f"stage {i}", alpha=0.85)
-    else:
-      ax.plot(t, err, label="mean error")
-    ax.set_xlabel("t (s)")
-    ax.set_ylabel("loss")
-    ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3)
-  fig.tight_layout()
-  fig.savefig(out, dpi=120)
-  plt.close(fig)
-  return out
-
-
-def plot_summary_stages(summary_path: Path | str, out_path: Path | str) -> Path:
-  """
-  Bar chart of per-stage MSE from a run ``summary.json``.
-
-  Looks for ``per_stage_mse`` or ``val_per_stage`` mapping stage id to scalar loss.
-  """
-  out = Path(out_path)
-  out.parent.mkdir(parents=True, exist_ok=True)
-  fig, ax = plt.subplots(figsize=(8, 4))
-  p = Path(summary_path)
-  if not p.is_file():
-    ax.text(0.5, 0.5, "no summary", ha="center", va="center", transform=ax.transAxes)
-  else:
-    with p.open(encoding="utf-8") as f:
-      summary = json.load(f)
-    stages = summary.get("per_stage_mse") or summary.get("val_per_stage") or {}
-    if isinstance(stages, dict) and stages:
-      keys = sorted(stages.keys(), key=lambda k: int(str(k).replace("stage", "")) if str(k).replace("stage", "").isdigit() else k)
-      vals = [stages[k] for k in keys]
-      ax.bar([str(k) for k in keys], vals, color="#2f6f8f")
-      ax.set_ylabel("MSE")
-      ax.set_xlabel("stage")
-    else:
-      ax.text(0.5, 0.5, "no per_stage_mse", ha="center", va="center", transform=ax.transAxes)
-  fig.tight_layout()
-  fig.savefig(out, dpi=120)
-  plt.close(fig)
-  return out
 
 
 def svg_smoke_for_source(source: TrajectorySource, k: int = 0) -> str:
@@ -405,28 +262,6 @@ def _cli_timeseries() -> None:
     print(p)
 
 
-def _cli_run_plots() -> None:
-  parser = argparse.ArgumentParser(description="Phase C training/eval figures")
-  parser.add_argument("--metrics", type=Path, default=Path("tests/fixtures/metrics.jsonl"))
-  parser.add_argument("--val-key", default="val_loss", help="Val metric key in metrics.jsonl")
-  parser.add_argument("--train-key", default="train_loss", help="Train metric key in metrics.jsonl")
-  parser.add_argument("--error-npz", type=Path, default=Path("tests/fixtures/error_vs_t.npz"))
-  parser.add_argument("--summary", type=Path, default=Path("tests/fixtures/summary.json"))
-  parser.add_argument("--out-dir", type=Path, default=Path("figures/eval"))
-  args = parser.parse_args()
-  args.out_dir.mkdir(parents=True, exist_ok=True)
-  print(
-    plot_training_curves(
-      args.metrics,
-      args.out_dir / "training.png",
-      val_key=args.val_key,
-      train_key=args.train_key,
-    )
-  )
-  print(plot_error_vs_t(args.error_npz, args.out_dir / "error_vs_t.png"))
-  print(plot_summary_stages(args.summary, args.out_dir / "summary_stages.png"))
-
-
 if __name__ == "__main__":
   import sys
 
@@ -439,7 +274,8 @@ if __name__ == "__main__":
   elif cmd == "timeseries":
     _cli_timeseries()
   elif cmd == "eval":
-    _cli_run_plots()
+    from srcs.visualization.eval_figures import main as eval_figures_main
+    eval_figures_main()
   else:
     print(f"unknown command: {cmd}")
     raise SystemExit(2)

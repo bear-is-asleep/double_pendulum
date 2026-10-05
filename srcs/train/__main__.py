@@ -1,11 +1,11 @@
 """
-Train CLI. Smoke presets: ``configs/smoke/<name>.yaml``.
+Train CLI. Job configs: ``configs/train/<name>.yaml`` (``small``, ``full``, ...).
 
 Examples::
 
-  python -m srcs.simulation.generate_smoke_data small
-  python -m srcs.train --smoke small --force
-  python -m srcs.train --smoke sanity --model curriculum --force
+  python -m srcs.simulation.generate_data small
+  python -m srcs.train --config small --force
+  python -m srcs.train --config full --model curriculum --force
 """
 
 from __future__ import annotations
@@ -15,10 +15,11 @@ import logging
 import sys
 from pathlib import Path
 
-from srcs.loader import list_smoke_presets
+from srcs.loader import list_configs
 from srcs.train.base import prepare_run_dir, require_stage_pools
 from srcs.train.job import resolve_train_job
 from srcs.train.registry import list_train_model_names, trainer_for_model
+from srcs.utils.yaml_io import print_mapping_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -26,16 +27,16 @@ logger = logging.getLogger(__name__)
 def build_parser() -> argparse.ArgumentParser:
   p = argparse.ArgumentParser(description="Train surrogate from pools on disk")
   p.add_argument(
-    "--smoke",
-    choices=list_smoke_presets(),
+    "--config",
+    choices=list_configs("train"),
     default=None,
-    help="Use paths and train overrides from configs/smoke/<name>.yaml",
+    help="Training job from configs/train/<name>.yaml (same stems as data: small, full)",
   )
   p.add_argument(
     "--model",
     choices=list_train_model_names(),
     default=None,
-    help="Model YAML stem (default: baseline, or preset train.model when --smoke)",
+    help="Model YAML stem (default: baseline, or train.model in job YAML)",
   )
   p.add_argument("--data-root", type=Path, default=None, help="NPZ pool directory")
   p.add_argument("--runs-root", type=Path, default=None, help="Output runs/ root")
@@ -66,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
 
   try:
     job = resolve_train_job(
-      smoke=args.smoke,
+      config=args.config,
       model=args.model,
       data_root=args.data_root,
       runs_root=args.runs_root,
@@ -81,6 +82,21 @@ def main(argv: list[str] | None = None) -> int:
 
   device = args.device if args.device is not None else job.device
 
+  print_mapping_yaml(
+    "training parameters",
+    {
+      "train_config": args.config,
+      "model": job.model_name,
+      "data_root": job.data_root,
+      "runs_root": job.runs_root,
+      "run_id": job.run_id,
+      "stages": job.stages,
+      "device": device,
+      "max_epochs": job.max_epochs,
+      "train": job.cfg,
+    },
+  )
+
   try:
     require_stage_pools(job.data_root, job.stages)
     prepare_run_dir(job.runs_root, job.run_id, args.force)
@@ -91,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
       runs_root=job.runs_root,
       run_id=job.run_id,
       device_name=device,
-      max_epochs=job.max_epochs,
+      max_epochs=args.max_epochs,
     )
   except (FileExistsError, FileNotFoundError, KeyError) as exc:
     logger.error("%s", exc)

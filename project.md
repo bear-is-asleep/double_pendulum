@@ -50,14 +50,14 @@ HNN / physics-structured models are **out of scope for now** (see Future directi
 
 ## Config (YAML)
 
-- **Sampler / stage bounds:** `configs/sampler.yaml` (shared). Keys include `stage_min`, `num_stages` (max id), `g_min`, `g_max`, `g_zero`, `g_low`, `g_high`, `omega0_max`, `omega_traj_max`, energy-drift tol, Stage 5/6 `pe_min`, `stage6` mass gap, IC boxes `stage0`–`stage6`, $T$, $dt$, discard retries. There is no `g_stage1` key.
+- **Sampler / stage bounds:** `configs/data/full.yaml` (shared). Keys include `stage_min`, `num_stages` (max id), `g_min`, `g_max`, `g_zero`, `g_low`, `g_high`, `omega0_max`, `omega_traj_max`, energy-drift tol, Stage 5/6 `pe_min`, `stage6` mass gap, IC boxes `stage0`–`stage6`, $T$, $dt$, discard retries. There is no `g_stage1` key.
 - **Per-model configs:** `configs/models/<model_name>.yaml` (one file per model / strategy variant). Holds architecture, LR, batch, $k$, loss weights, seeds, and Active-only `n_ensemble`, etc. Sampler code loads sampler YAML; train/eval load the model YAML for that run.
 
 
 
 ## Curriculum stages
 
-Seven stages, ids **0–6**. Bounds live in `configs/sampler.yaml` (`stage_min`, `num_stages` = max id). Do not hardcode numbers in train scripts.
+Seven stages, ids **0–6**. Bounds live in `configs/data/full.yaml` (`stage_min`, `num_stages` = max id). Do not hardcode numbers in train scripts.
 
 **Stage 0 (added later):** same physics and masses as stage 1 ($m_2 = 0$, $g = g_{\mathrm{zero}}$), same `stage0` IC box as stage 1, but **exactly one** of $\omega_{10},\omega_{20}$ is fixed to $0$ per draw (the other is drawn from the box). Easiest uniform-spin subset before stage 1.
 
@@ -157,7 +157,7 @@ API: `sample(stage, n, cfg) ->` accepted parameter rows. $m_2 = 0$ on stages 0�
 
 ## Data (before baseline establishment)
 
-1. Load `configs/sampler.yaml`. Sample train / test ICs for stages 0 to 6 with accept/reject.
+1. Load `configs/data/full.yaml`. Sample train / test ICs for stages 0 to 6 with accept/reject.
 2. Simulate full trajectories; store wrapped $\theta$, $\omega$, energy, and params. Same $T$, $dt$ for all.
 3. **On-disk format (keep simple):** NumPy `.npz` under `data/` (one file per split/stage or a small set of arrays). Keys at minimum: params/ICs, $t$, $\sin/\cos$ targets, $\omega$, $E$ (and stage id). Exact key names live in the saver code; document them once in a module docstring.
 4. Train subsample stride $k$ is train-time only; disk keeps full resolution.
@@ -271,7 +271,7 @@ Index file optional: `runs/index.csv` with columns `run_id, experiment, status, 
 
 ## Deliverables
 
-- `configs/sampler.yaml` + `configs/models/*.yaml` + sampler module with documented stage ranges / constraints
+- `configs/data/full.yaml` + `configs/models/*.yaml` + sampler module with documented stage ranges / constraints
 - `runs/` tree with configs, checkpoints, metrics (PyTorch `state_dict` / checkpoint dicts [@pytorch_saving_models])
 - Locked baseline note (shared FC width / depth, $k$, LR, batch size; epochs / samples used) pointing at the winning `run_id`
   - Keep failed / dominated baseline trials under `runs/` for later plots (e.g. param size vs final loss)
@@ -290,13 +290,13 @@ Index file optional: `runs/index.csv` with columns `run_id, experiment, status, 
 Check off in GitHub or any Markdown preview that supports task lists (`- [ ]` / `- [x]`).
 
 - [x] **1. Simulator** — `srcs/` RK4, $E=T+V$, wrap angles
-- [x] **2. Config YAML** — `configs/sampler.yaml`, `configs/models/*.yaml`
+- [x] **2. Config YAML** — `configs/data/full.yaml`, `configs/models/*.yaml`
 - [x] **3. Sampler** — five-stage accept/reject. Ids in that code are stale until step 3b.
 - [x] **3b. Zero-mass stage.** New stage 1 ($m_2 = 0$), shift old stages 1–5 to 2–6 ([Zero-mass stage insertion](#zero-mass-stage-insertion))
 - [x] **4. Data** — five-stage `.npz` pools. Those files are the old ids. Do not rename them. Human regenerates after 3b.
 - [x] **4b. Visualization** — apps, plots, gifs on data now; ANN/metrics wiring later ([Visualization](#visualization-step-4b))
-- [ ] **5. Baseline establishment** — lock width, depth, $k$, LR, batch; `runs/`
-- [ ] **6. Models** — shared MLP from model YAML
+- [x] **5. Baseline establishment** — lock width, depth, $k$, LR, batch; `runs/`
+- [x] **6. Models** — shared MLP from model YAML
 - [ ] **7. Strategies** — baseline, curriculum, active, progressive hooks
 - [ ] **8. Checkpoint I/O + loader** — `best.pt` / `last.pt`, rebuild from config
 - [ ] **9. Train loop** — CLI, `metrics.jsonl`, run folders
@@ -387,7 +387,7 @@ Stages 1 and 2 share `g_zero`. They differ only in $m_2$. Do not give stage 1 a 
 
 Same model inputs as every other stage, including $m_2$. Stage 1 does not drop or rename heads. Output stays 6-D sin/cos + $\omega$. Loss stays sin/cos MSE + $\omega$ MSE.
 
-### `configs/sampler.yaml`
+### `configs/data/full.yaml`
 
 1. Set `num_stages: 6`.
 2. Rename `g_stage1` to `g_zero` and keep the value `0.0`. Delete `g_stage1`. Stage 1 and stage 2 both read `g_zero`.
@@ -442,7 +442,7 @@ Do not delete `data/`. Do not rename `stage{k}_*.npz` to `stage{k+1}_*.npz`. The
 
 ### Done when
 
-- [ ] `configs/sampler.yaml` matches the table and the pool lists above. No `g_stage1` key.
+- [ ] `configs/data/full.yaml` matches the table and the pool lists above. No `g_stage1` key.
 - [ ] `sample(stage, n, cfg)` accepts stages 1..6 and rejects $m_2 = 0$ on stages 2..6.
 - [ ] Stage-1 RK4 matches $\theta_{i0} + \omega_{i0} t$ before wrapping.
 - [ ] `python -m pytest tests/test_sampler.py tests/test_configs.py` passes.
@@ -461,7 +461,7 @@ Agents build **one step of the build order at a time**. Human (or a thin orchest
 - **Do:** code, tests, and configs needed for the assigned step only.
 - **Don't:** Future directions; HNN / LNN / physics-structured models; rewriting this whole `project.md`; drive-by refactors of unrelated modules; inventing new experiments or strategies; changing locked baseline knobs after they are locked (width / final depth / LR / batch / $k$).
 - **Read, do not rewrite unless assigned:** `project.md`, frozen test data under `data/`, existing `runs/` artifacts from other strategies.
-- **Config ownership:** sampler bounds live in `configs/sampler.yaml`; architecture / train knobs live in `configs/models/<name>.yaml`. Do not hardcode stage numbers that already belong in YAML.
+- **Config ownership:** sampler bounds live in `configs/data/full.yaml`; architecture / train knobs live in `configs/models/<name>.yaml`. Do not hardcode stage numbers that already belong in YAML.
 - **Loss / targets stay locked:** predict 6-D $(\sin\theta_1,\cos\theta_1,\sin\theta_2,\cos\theta_2,\omega_1,\omega_2)$; MSE on sin/cos + $\omega$; no plain $\theta$ MSE.
 - **Stop condition:** implement the step, add focused tests or a smoke script, report what changed and what was left undone. Do not "continue" into the next build-order step.
 - **Human-owned (agents may write the CLI, not burn agent tokens running full jobs):** large pool generation, multi-epoch training, GPU sweeps, packing `runs/` from long jobs. Agents may run tiny unit tests and tiny smoke sims.
@@ -471,21 +471,21 @@ Agents build **one step of the build order at a time**. Human (or a thin orchest
 ### Step scopes
 
 
-| Step                       | Agent may touch                                                                                                                             | Agent must not                                                                                            | Done when                                                                                                                                                                                                                |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Step                       | Agent may touch                                                                                                                  | Agent must not                                                                                            | Done when                                                                                                                                                                                                                |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 1. Simulator               | `srcs/` physics / integrate / energy helpers; physics tests                                                                      | Sampler, train, app redesign, YAML experiment knobs                                                       | RK4 traj + $E=T+V$ match PE/KE formulas here; energy nearly conserved on short smoke; angles wrappable to $(-\pi,\pi]$                                                                                                   |
-| 2. Config YAML             | `configs/sampler.yaml`, `configs/models/*.yaml` keys used later                                                                             | Invent new strategies; Future directions keys                                                             | Keys cover stages, safety, IC boxes, loss weights, seeds; loadable without code edits for those values                                                                                                                   |
-| 3. Sampler                 | Sampler module + tests; reads sampler YAML                                                                                                  | MLP, train loop, rewriting frozen data layout mid-flight                                                  | Done for the old five stages. Do not extend this row. Use step 3b.                                                                                                                                                       |
-| 3b. Zero-mass stage        | Files listed in [Zero-mass stage insertion](#zero-mass-stage-insertion)                                                                     | `physics.py` ODE branches; loss; model YAML; viz apps; deleting `data/`; rewriting this `project.md`      | Checklist in that section, including `pytest tests/test_sampler.py tests/test_configs.py`                                                                                                                                |
-| 4. Data                    | Dataset builder / `.npz` writer+reader; docs of array keys                                                                                  | Changing loss; training strategies; deleting frozen test without explicit ask                             | Train/val/test pools for stages 1–6 on disk after 3b; test frozen; val carved from train; pointwise $(t,\mathrm{IC},m,g)\to$ 6-D target; full-res on disk ($k$ train-time only). Full pool generation stays human-owned. |
+| 2. Config YAML             | `configs/data/full.yaml`, `configs/models/*.yaml` keys used later                                                                  | Invent new strategies; Future directions keys                                                             | Keys cover stages, safety, IC boxes, loss weights, seeds; loadable without code edits for those values                                                                                                                   |
+| 3. Sampler                 | Sampler module + tests; reads sampler YAML                                                                                       | MLP, train loop, rewriting frozen data layout mid-flight                                                  | Done for the old five stages. Do not extend this row. Use step 3b.                                                                                                                                                       |
+| 3b. Zero-mass stage        | Files listed in [Zero-mass stage insertion](#zero-mass-stage-insertion)                                                          | `physics.py` ODE branches; loss; model YAML; viz apps; deleting `data/`; rewriting this `project.md`      | Checklist in that section, including `pytest tests/test_sampler.py tests/test_configs.py`                                                                                                                                |
+| 4. Data                    | Dataset builder / `.npz` writer+reader; docs of array keys                                                                       | Changing loss; training strategies; deleting frozen test without explicit ask                             | Train/val/test pools for stages 1–6 on disk after 3b; test frozen; val carved from train; pointwise $(t,\mathrm{IC},m,g)\to$ 6-D target; full-res on disk ($k$ train-time only). Full pool generation stays human-owned. |
 | 4b. Visualization          | `srcs/viz.py`, `plots.py`, `app.py` refactor, `app_data.py`, gif/time-series CLIs, `SurrogateSource` stub + overlay hooks; tests | Training the MLP; implementing checkpoint loader (Step 8); changing `.npz` schema without updating reader | **Visualization (step 4b)** Done when checklist                                                                                                                                                                          |
-| 5. Baseline establishment  | Baseline model YAML + short search script; `runs/` for baseline trials                                                                      | Curriculum / active / progressive logic; unlocking knobs after lock                                       | Document locked width, depth, $k$, LR, batch + winning `run_id`; pass bar = per-stage val $\le$ `stage_pass_mse`                                                                                                         |
-| 6. Models                  | Shared MLP builder from model YAML (width / depth); unit shape tests                                                                        | Strategy-specific data policies; eval plots                                                               | Rebuild from config; input/output dims match Setup; progressive can start at `depth_start`                                                                                                                               |
-| 7. Strategies              | Baseline / curriculum / active / progressive **data or schedule hooks only** (one strategy per agent run preferred)                         | Other strategies; HNN; changing locked width / LR / batch / $k$                                           | Strategy matches Experiments table; Active uses ensemble std + $\lambda(t)$; Progressive grows depth only                                                                                                                |
-| 8. Checkpoint I/O + loader | `runs/<run_id>/` layout; save/load `state_dict` dicts; optional `runs/index.csv`; wire `SurrogateSource` in viz                             | Retrain logic; sampler changes; new viz apps                                                              | `best.pt` / `last.pt` policy; loader rebuilds from `config.yaml` then `load_state_dict`; `weights_only=True`; ANN overlay works in existing app when `run_id` set                                                        |
-| 9. Train loop              | Train entrypoint; metrics.jsonl; early stopping / epoch budget floats                                                                       | Redefining loss; regenerating frozen test; new plot/UI stack                                              | One CLI/path per model YAML; writes run folder; logs epochs, samples seen, val loss                                                                                                                                      |
-| 10. Eval                   | Frozen-test metrics; error-vs-$t$; forgetting vs Stage-1 reference; `results.csv` hooks; export paths consumed by 4b plot CLIs              | Retraining; changing train data; new viz layout                                                           | Per-stage sin/cos+$\omega$ MSE; error-vs-$t$ curves saved or rebuildable; forgetting delta defined; Phase C plots render from those exports                                                                              |
-| 11. Run all 4              | Launch scripts / docs to run strategies 1–4 with shared locks                                                                               | Inventing 5th strategy; floating locked knobs                                                             | Four run folders + comparable `summary.json` / `results.csv` rows; comparison figures via existing 4b plot CLIs                                                                                                          |
+| 5. Baseline establishment  | Baseline model YAML + short search script; `runs/` for baseline trials                                                           | Curriculum / active / progressive logic; unlocking knobs after lock                                       | Document locked width, depth, $k$, LR, batch + winning `run_id`; pass bar = per-stage val $\le$ `stage_pass_mse`                                                                                                         |
+| 6. Models                  | Shared MLP builder from model YAML (width / depth); unit shape tests                                                             | Strategy-specific data policies; eval plots                                                               | Rebuild from config; input/output dims match Setup; progressive can start at `depth_start`                                                                                                                               |
+| 7. Strategies              | Baseline / curriculum / active / progressive **data or schedule hooks only** (one strategy per agent run preferred)              | Other strategies; HNN; changing locked width / LR / batch / $k$                                           | Strategy matches Experiments table; Active uses ensemble std + $\lambda(t)$; Progressive grows depth only                                                                                                                |
+| 8. Checkpoint I/O + loader | `runs/<run_id>/` layout; save/load `state_dict` dicts; optional `runs/index.csv`; wire `SurrogateSource` in viz                  | Retrain logic; sampler changes; new viz apps                                                              | `best.pt` / `last.pt` policy; loader rebuilds from `config.yaml` then `load_state_dict`; `weights_only=True`; ANN overlay works in existing app when `run_id` set                                                        |
+| 9. Train loop              | Train entrypoint; metrics.jsonl; early stopping / epoch budget floats                                                            | Redefining loss; regenerating frozen test; new plot/UI stack                                              | One CLI/path per model YAML; writes run folder; logs epochs, samples seen, val loss                                                                                                                                      |
+| 10. Eval                   | Frozen-test metrics; error-vs-$t$; forgetting vs Stage-1 reference; `results.csv` hooks; export paths consumed by 4b plot CLIs   | Retraining; changing train data; new viz layout                                                           | Per-stage sin/cos+$\omega$ MSE; error-vs-$t$ curves saved or rebuildable; forgetting delta defined; Phase C plots render from those exports                                                                              |
+| 11. Run all 4              | Launch scripts / docs to run strategies 1–4 with shared locks                                                                    | Inventing 5th strategy; floating locked knobs                                                             | Four run folders + comparable `summary.json` / `results.csv` rows; comparison figures via existing 4b plot CLIs                                                                                                          |
 
 
 

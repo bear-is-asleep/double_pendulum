@@ -35,10 +35,13 @@ Do not delete frozen test pools without an explicit force flag.
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
+from tqdm import tqdm
 from numpy.typing import NDArray
 
 from srcs.physics.core import (
@@ -337,6 +340,42 @@ def _full_traj_ok(traj: Trajectory, cfg: dict) -> str | None:
   return None
 
 
+def _params_vector(row: SampleRow) -> NDArray[np.float64]:
+  return np.array(
+    [
+      row.theta1,
+      row.theta2,
+      row.omega1,
+      row.omega2,
+      row.m1,
+      row.m2,
+      row.l,
+      row.g,
+    ],
+    dtype=np.float64,
+  )
+
+
+def _try_append_accepted_row(
+  row: SampleRow,
+  cfg: dict,
+  t_grid: NDArray[np.float64],
+  params_list: list[NDArray[np.float64]],
+  series: dict[str, list[NDArray[np.float64]]],
+) -> bool:
+  """Integrate one IC; append pool arrays when accepted. False if probe rejects."""
+  traj = integrate_row(row, cfg)
+  if traj is None:
+    return False
+  if traj.t.shape != t_grid.shape or not np.allclose(traj.t, t_grid):
+    raise RuntimeError("trajectory time grid mismatch vs sampler T/dt")
+  packed = _traj_to_wrapped_arrays(traj)
+  params_list.append(_params_vector(row))
+  for key in SERIES_KEYS:
+    series[key].append(packed[key])
+  return True
+
+
 def integrate_row(row: SampleRow, cfg: dict) -> Trajectory | None:
   """Full-T RK4 for one accepted IC row; None if full traj fails safety."""
   state = PendulumState(row.theta1, row.theta2, row.omega1, row.omega2)
@@ -408,37 +447,25 @@ def build_pool(
   accepted = 0
   rounds = 0
 
-  while accepted < n and rounds < max_batch_rounds:
-    need = n - accepted
-    result = sample(stage, need, cfg, rng=gen)
-    rounds += need
-    for row in result.rows:
-      traj = integrate_row(row, cfg)
-      if traj is None:
-        continue
-      if traj.t.shape != t_grid.shape or not np.allclose(traj.t, t_grid):
-        raise RuntimeError("trajectory time grid mismatch vs sampler T/dt")
-      packed = _traj_to_wrapped_arrays(traj)
-      params_list.append(
-        np.array(
-          [
-            row.theta1,
-            row.theta2,
-            row.omega1,
-            row.omega2,
-            row.m1,
-            row.m2,
-            row.l,
-            row.g,
-          ],
-          dtype=np.float64,
-        )
-      )
-      for key in SERIES_KEYS:
-        series[key].append(packed[key])
-      accepted += 1
-      if accepted >= n:
-        break
+  quiet = "PYTEST_CURRENT_TEST" in os.environ
+  with tqdm(
+    total=n,
+    desc=f"stage {stage} {split}",
+    unit="traj",
+    file=sys.stderr,
+    disable=quiet,
+  ) as pbar:
+    while accepted < n and rounds < max_batch_rounds:
+      need = n - accepted
+      result = sample(stage, need, cfg, rng=gen)
+      rounds += need
+      for row in result.rows:
+        if not _try_append_accepted_row(row, cfg, t_grid, params_list, series):
+          continue
+        accepted += 1
+        pbar.update(1)
+        if accepted >= n:
+          break
 
   if accepted < n:
     raise RuntimeError(

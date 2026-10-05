@@ -1,15 +1,9 @@
-# Baseline train smoke: tiny pools + 2 epochs (pair with generate_smoke_data small).
+# Fast CI: tiny pools + short train (mirror configs/data/small.yaml intent).
 
-name: small
 data_root: data/baseline_small
 runs_root: runs/baseline_small
-run_id: baseline_w32_d1_k2_seed0_small
+run_id: baseline_w32_d1_k2
 stages: [0, 1]
-
-data:
-  train_per_stage: 4
-  test_per_stage: 1
-  val_fraction: 0.25
 
 train:
   model: baseline

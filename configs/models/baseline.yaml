@@ -2,7 +2,8 @@ name: baseline_ann
 strategy: baseline
 
 # Step 5 search grid (lr/batch stay on base.yaml until locked)
-baseline_search:
-  hidden_widths: [64, 128, 256]
-  hidden_depths: [2, 3]
-  subsample_stride_k: [2, 4, 8]
+# baseline_search:
+#   hidden_widths: [64, 128, 256]
+#   hidden_depths: [2, 3]
+#   subsample_stride_k: [2, 4, 8]
+

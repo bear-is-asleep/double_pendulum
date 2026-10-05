@@ -1,0 +1,6 @@
+name: baseline_vs_curriculum_small
+models:
+  - label: baseline
+    run_dir: runs/baseline_small/baseline_w512_d2_k4
+  - label: curriculum
+    run_dir: runs/curriculum_small/curriculum_w512_d2_k4

@@ -27,33 +27,32 @@ from srcs.eval.run_layout import RunEvalLayout, infer_val_key
 from srcs.utils.json_io import load_jsonl, read_json
 from srcs.utils.paths import ensure_dir
 from srcs.visualization.mpl_io import prepare_out, write_fig, write_placeholder
+from srcs.visualization.mpl_plots import (
+  MODEL_COMPARE_COLORS,
+  make_rect_grid,
+  step_series,
+)
 
 
-def _epoch_x(rows: list[dict]) -> list:
+def epoch_x(rows: list[dict]) -> list:
   return [r.get("epoch", r.get("global_step", i)) for i, r in enumerate(rows)]
 
 
-def _as_stage_rows(values: NDArray) -> NDArray[np.float64]:
+_epoch_x = epoch_x
+
+
+def as_stage_rows(values: NDArray) -> NDArray[np.float64]:
   arr = np.asarray(values, dtype=np.float64)
   if arr.ndim == 1:
     return arr.reshape(1, -1)
   return arr
 
 
-def _step_series(
-  ax,
-  t: NDArray[np.float64],
-  y: NDArray[np.float64],
-  *,
-  color: str,
-  label: str | None = None,
-  fill_alpha: float = 0.22,
-) -> None:
-  ax.fill_between(t, 0, y, step="post", alpha=fill_alpha, color=color, linewidth=0)
-  ax.step(t, y, where="post", color=color, linewidth=1.0, label=label)
+_as_stage_rows = as_stage_rows
+_step_series = step_series
 
 
-def _parse_stage_id(key: object) -> int:
+def parse_stage_id(key: object) -> int:
   text = str(key)
   if text.startswith("stage"):
     suffix = text.removeprefix("stage")
@@ -62,10 +61,16 @@ def _parse_stage_id(key: object) -> int:
   return int(text)
 
 
-def _stage_ids_from_npz(data: np.lib.npyio.NpzFile, n_rows: int) -> NDArray[np.int64]:
+_parse_stage_id = parse_stage_id
+
+
+def stage_ids_from_npz(data: np.lib.npyio.NpzFile, n_rows: int) -> NDArray[np.int64]:
   if "stage_ids" in data.files:
     return np.asarray(data["stage_ids"], dtype=np.int64).reshape(-1)
   return np.arange(n_rows, dtype=np.int64)
+
+
+_stage_ids_from_npz = stage_ids_from_npz
 
 
 def _filter_stage_dict(
@@ -84,16 +89,35 @@ def _filter_stage_dict(
   return [lab for _, lab, _ in items], [val for _, _, val in items]
 
 
+_STAGE_MIX_COLORS = MODEL_COMPARE_COLORS
+_STAGE_MIX_OVERLAY_ALPHA = 0.38
+
+
+def _draw_stage_mix_stack(
+  ax,
+  x: list,
+  stages: list[int],
+  mat: NDArray[np.float64],
+  *,
+  alpha: float = _STAGE_MIX_OVERLAY_ALPHA,
+) -> None:
+  colors = [_STAGE_MIX_COLORS[i % len(_STAGE_MIX_COLORS)] for i in range(len(stages))]
+  labels = [f"stage {s}" for s in stages]
+  ax.stackplot(x, *mat, labels=labels, colors=colors, alpha=alpha, zorder=1)
+
+
 def plot_training_curves(
   metrics_path: Path | str,
   out_path: Path | str,
   *,
   val_key: str = "val_loss",
   train_key: str = "train_loss",
+  rows: list[dict] | None = None,
 ) -> Path:
-  """Train loss as a line; validation as scatter on the same axes."""
+  """Train loss as a line; validation as scatter. Curriculum mix shaded behind."""
   out = prepare_out(out_path)
-  rows = load_jsonl(metrics_path)
+  if rows is None:
+    rows = load_jsonl(metrics_path)
   if not rows:
     return write_placeholder(
       out,
@@ -101,26 +125,188 @@ def plot_training_curves(
       figsize=(8, 4),
       title="training curves (empty fixture)",
     )
-  fig, ax = plt.subplots(figsize=(8, 4))
+  has_mix = metrics_has_curriculum_mix(rows)
+  fig, ax = plt.subplots(figsize=(10, 5) if has_mix else (8, 4))
   x = _epoch_x(rows)
+  stages: list[int] = []
+  if has_mix:
+    _, stages, mat = stage_fraction_series(rows)
+    if stages:
+      _draw_stage_mix_stack(ax, x, stages, mat)
   has_train = any(train_key in r and r.get(train_key) is not None for r in rows)
   has_val = any(val_key in r and r.get(val_key) is not None for r in rows)
+  loss_vals: list[float] = []
   if has_train:
     y_train = [r.get(train_key) for r in rows]
-    ax.plot(x, y_train, label=f"{train_key} (train)", color="#2f6f8f", linewidth=1.5)
+    for v in y_train:
+      if v is not None and np.isfinite(v):
+        loss_vals.append(float(v))
+    ax.plot(
+      x,
+      y_train,
+      label=f"{train_key} (train)",
+      color="#1a2a3a",
+      linewidth=1.8,
+      zorder=4,
+    )
   if has_val:
     y_val = [r.get(val_key) for r in rows]
-    ax.scatter(x, y_val, label=f"{val_key} (val)", color="#c45c26", s=28, zorder=3)
+    for v in y_val:
+      if v is not None and np.isfinite(v):
+        loss_vals.append(float(v))
+    ax.scatter(
+      x,
+      y_val,
+      label=f"{val_key} (val)",
+      color="#c45c26",
+      s=28,
+      zorder=5,
+      edgecolors="white",
+      linewidths=0.4,
+    )
   if not has_train and not has_val:
     ax.text(0.5, 0.5, "no train/val keys", ha="center", va="center", transform=ax.transAxes)
+  #ymax = max(loss_vals) * 1.08 if loss_vals else 1.0
+  ymax = 0.4 # hard code to keep all plots on same scale
+  ax.set_ylim(0.0, ymax)
   ax.set_xlabel("epoch")
   ax.set_ylabel("loss")
-  ax.legend()
+  ncol = min(len(stages) + 2, 4) if has_mix and stages else 1
+  ax.legend(loc="upper right", fontsize=8, ncol=ncol)
   ax.grid(True, alpha=0.3)
   return write_fig(fig, out)
 
 
-def _plot_time_step_per_stage(
+def metrics_has_curriculum_mix(rows: list[dict]) -> bool:
+  """True when any metrics row logs non-empty ``train_stage_fraction``."""
+  for row in rows:
+    fr = row.get("train_stage_fraction")
+    if isinstance(fr, dict) and fr:
+      return True
+  return False
+
+
+def stage_fraction_series(
+  rows: list[dict],
+) -> tuple[list, list[int], NDArray[np.float64]]:
+  """Epoch x-axis, sorted stage ids, and (n_stage, n_epoch) fraction matrix."""
+  if not rows:
+    return [], [], np.zeros((0, 0), dtype=np.float64)
+  stage_set: set[int] = set()
+  for row in rows:
+    fr = row.get("train_stage_fraction")
+    if not isinstance(fr, dict):
+      continue
+    for key in fr:
+      stage_set.add(_parse_stage_id(key))
+  stages = sorted(stage_set)
+  if not stages:
+    return _epoch_x(rows), [], np.zeros((0, len(rows)), dtype=np.float64)
+  mat = np.zeros((len(stages), len(rows)), dtype=np.float64)
+  for i, row in enumerate(rows):
+    fr = row.get("train_stage_fraction")
+    if not isinstance(fr, dict):
+      continue
+    for j, sid in enumerate(stages):
+      raw = fr.get(str(sid), fr.get(sid))
+      if raw is not None:
+        mat[j, i] = float(raw)
+  return _epoch_x(rows), stages, mat
+
+
+def cumulative_train_seconds_series(rows: list[dict]) -> tuple[list, NDArray[np.float64]]:
+  """Epoch x-axis and cumulative wall time (s) from ``epoch_seconds`` rows."""
+  if not rows:
+    return [], np.zeros(0, dtype=np.float64)
+  x = _epoch_x(rows)
+  per_epoch = np.zeros(len(rows), dtype=np.float64)
+  for i, row in enumerate(rows):
+    raw = row.get("epoch_seconds")
+    if raw is not None and np.isfinite(raw):
+      per_epoch[i] = float(raw)
+  return x, np.cumsum(per_epoch)
+
+
+def plot_cumulative_train_time(
+  metrics_path: Path | str,
+  out_path: Path | str,
+  *,
+  rows: list[dict] | None = None,
+) -> Path:
+  """Cumulative training wall time vs epoch from ``epoch_seconds`` in metrics."""
+  out = prepare_out(out_path)
+  if rows is None:
+    rows = load_jsonl(metrics_path)
+  if not rows:
+    return write_placeholder(
+      out,
+      "no metrics",
+      figsize=(8, 3),
+      title="cumulative train time (empty fixture)",
+    )
+  has_timing = any(
+    row.get("epoch_seconds") is not None and np.isfinite(row.get("epoch_seconds"))
+    for row in rows
+  )
+  if not has_timing:
+    return write_placeholder(
+      out,
+      "no epoch_seconds",
+      figsize=(8, 3),
+      title="cumulative train time (missing timing)",
+    )
+  x, cum_s = cumulative_train_seconds_series(rows)
+  fig, ax = plt.subplots(figsize=(8, 3))
+  ax.plot(x, cum_s, color="#2f6f8f", linewidth=1.8)
+  ax.fill_between(x, 0, cum_s, alpha=0.15, color="#2f6f8f")
+  ax.set_xlabel("epoch")
+  ax.set_ylabel("cumulative time (s)")
+  ax.set_title("cumulative training time")
+  ax.grid(True, alpha=0.3)
+  total = float(cum_s[-1]) if cum_s.size else 0.0
+  ax.text(
+    0.98,
+    0.05,
+    f"total {total:.1f} s",
+    transform=ax.transAxes,
+    ha="right",
+    va="bottom",
+    fontsize=9,
+  )
+  return write_fig(fig, out)
+
+
+def plot_curriculum_stage_mix(
+  metrics_path: Path | str,
+  out_path: Path | str,
+  *,
+  rows: list[dict] | None = None,
+) -> Path:
+  """Stacked area of per-epoch ``train_stage_fraction`` (curriculum runs)."""
+  out = prepare_out(out_path)
+  if rows is None:
+    rows = load_jsonl(metrics_path)
+  if not rows or not metrics_has_curriculum_mix(rows):
+    return write_placeholder(
+      out,
+      "no curriculum mix",
+      figsize=(10, 4),
+      title="curriculum train stage mix (empty)",
+    )
+  x, stages, mat = stage_fraction_series(rows)
+  fig, ax = plt.subplots(figsize=(10, 4))
+  _draw_stage_mix_stack(ax, x, stages, mat, alpha=0.85)
+  ax.set_ylim(0.0, 1.0)
+  ax.set_xlabel("epoch")
+  ax.set_ylabel("train fraction")
+  ax.set_title("curriculum train stage mix")
+  ncol = min(len(stages), 4)
+  ax.legend(loc="upper left", fontsize=8, ncol=ncol)
+  ax.grid(True, alpha=0.3, axis="y")
+  return write_fig(fig, out)
+
+
+def plot_time_step_per_stage(
   t: NDArray[np.float64],
   values: NDArray[np.float64],
   stage_ids: NDArray[np.int64],
@@ -130,26 +316,21 @@ def _plot_time_step_per_stage(
   color: str = "#2f6f8f",
 ) -> plt.Figure:
   n_stage = int(values.shape[0])
-  ncols = min(3, n_stage)
-  nrows = int(np.ceil(n_stage / ncols))
-  fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), squeeze=False)
+  grid = make_rect_grid(n_stage, ncols_max=3)
   ymax = float(np.nanmax(values)) if values.size else 1.0
-  for idx in range(nrows * ncols):
-    r, c = divmod(idx, ncols)
-    ax = axes[r][c]
-    if idx >= n_stage:
-      ax.axis("off")
-      continue
+  y_hi = ymax * 1.05 if ymax > 0 else 1.0
+  for idx in range(n_stage):
+    ax = grid.axis_at(idx)
     sid = int(stage_ids[idx])
-    y = values[idx]
-    _step_series(ax, t, y, color=color)
+    _step_series(ax, t, values[idx], color=color)
     ax.set_title(f"stage {sid}")
     ax.set_xlabel("t (s)")
     ax.set_ylabel(ylabel)
-    ax.set_ylim(0, ymax * 1.05 if ymax > 0 else 1.0)
+    ax.set_ylim(0, y_hi)
     ax.grid(True, axis="y", alpha=0.3)
-  fig.suptitle(title)
-  return fig
+  grid.hide_unused(n_stage)
+  grid.fig.suptitle(title)
+  return grid.fig
 
 
 def plot_error_vs_t(
@@ -173,7 +354,7 @@ def plot_error_vs_t(
     if np.any(mask):
       err = err[mask]
       stage_ids = stage_ids[mask]
-  fig = _plot_time_step_per_stage(
+  fig = plot_time_step_per_stage(
     t,
     err,
     stage_ids,
@@ -290,6 +471,18 @@ def _summary_bars(
   return stages_map, ylabel, allowed_list
 
 
+def stage_mse_map_from_layout(layout: RunEvalLayout) -> dict[int, float]:
+  """Per-stage scalar MSE from eval_test or training summary on a run folder."""
+  payload = _summary_bars(layout.summary, layout.eval_summary, None)
+  if payload is None:
+    raise FileNotFoundError(
+      f"run {layout.run_id!r}: no eval_summary.json or summary.json",
+    )
+  stages_map, _, allowed_list = payload
+  keys, vals = _filter_stage_dict(stages_map, allowed_list)
+  return {parse_stage_id(k): v for k, v in zip(keys, vals)}
+
+
 def plot_summary_stages(
   summary_path: Path | str | None,
   out_path: Path | str,
@@ -328,9 +521,24 @@ def render_eval_figures(
   """Write the standard eval PNG set under ``out_dir``."""
   out = ensure_dir(out_dir)
   written: list[Path] = []
+  metrics_rows: list[dict] | None = None
   if metrics_path and Path(metrics_path).is_file():
+    metrics_rows = load_jsonl(metrics_path)
     written.append(
-      plot_training_curves(metrics_path, out / "training.png", val_key=val_key, train_key=train_key)
+      plot_training_curves(
+        metrics_path,
+        out / "training.png",
+        val_key=val_key,
+        train_key=train_key,
+        rows=metrics_rows,
+      )
+    )
+    written.append(
+      plot_cumulative_train_time(
+        metrics_path,
+        out / "cumulative_train_time.png",
+        rows=metrics_rows,
+      )
     )
   if error_npz and Path(error_npz).is_file():
     written.append(plot_error_vs_t(error_npz, out / "error_vs_t.png"))

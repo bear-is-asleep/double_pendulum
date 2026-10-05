@@ -8,7 +8,8 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from collections.abc import Callable
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -108,7 +109,7 @@ def per_stage_val_losses(
 
 
 def format_stage_val_line(stage_val: list[StageValLoss]) -> str:
-  parts = [f"s{row.stage}={row.mse:.4f}" for row in stage_val]
+  parts = [f"val_s{row.stage}={row.mse:.4f}" for row in stage_val]
   return " ".join(parts) if parts else "stage_val=-"
 
 
@@ -150,6 +151,7 @@ def persist_epoch_artifacts(
   mean_val: float,
   stage_val: list[StageValLoss],
   metrics_extra: dict[str, Any] | None = None,
+  epoch_seconds: float | None = None,
 ) -> None:
   """Write metrics.jsonl row, last.pt, and best.pt when val improves."""
   record: dict[str, Any] = {
@@ -159,6 +161,8 @@ def persist_epoch_artifacts(
     "stage_val_mse": stage_val_dict(stage_val),
     "global_step": global_step,
   }
+  if epoch_seconds is not None:
+    record["epoch_seconds"] = float(epoch_seconds)
   if metrics_extra:
     record.update(metrics_extra)
   append_metrics_jsonl(run_dir, record)
@@ -182,6 +186,44 @@ def persist_epoch_artifacts(
     cfg=cfg,
     save_fn=save_checkpoint,
   )
+
+
+def finish_logged_epoch(
+  *,
+  epoch_t0: float,
+  log_fn: Callable[[float], None],
+  run_dir: Path,
+  ckpt_dir: Path,
+  model: nn.Module,
+  optimizer: optim.Optimizer,
+  tracker: BestCheckpointTracker,
+  cfg: dict[str, Any],
+  epoch: int,
+  global_step: int,
+  train_loss: float,
+  mean_val: float,
+  stage_val: list[StageValLoss],
+  metrics_extra: dict[str, Any] | None = None,
+) -> float:
+  """One wall-clock sample: write metrics.jsonl once, then log it."""
+  epoch_seconds = time.perf_counter() - epoch_t0
+  persist_epoch_artifacts(
+    run_dir=run_dir,
+    ckpt_dir=ckpt_dir,
+    model=model,
+    optimizer=optimizer,
+    tracker=tracker,
+    cfg=cfg,
+    epoch=epoch,
+    global_step=global_step,
+    train_loss=train_loss,
+    mean_val=mean_val,
+    stage_val=stage_val,
+    metrics_extra=metrics_extra,
+    epoch_seconds=epoch_seconds,
+  )
+  log_fn(epoch_seconds)
+  return epoch_seconds
 
 
 def train_eval_epoch(
@@ -224,7 +266,7 @@ def complete_trial(
   epochs_run: int,
   global_step: int,
   k: int,
-  pass_mse: float,
+  pass_mse: float | Mapping[int, float],
   summary_extra: dict[str, Any] | None = None,
 ) -> MixedPoolTrialResult:
   """Restore best weights, write summary.json, return trial result."""
@@ -233,7 +275,10 @@ def complete_trial(
     model, data_root, stages, cfg, device, weights
   )
   final_mean = mean_finite_mse(final_stage_val)
-  passes = clears_pass_bar(final_stage_val, pass_mse)
+  passes = clears_pass_bar(
+    final_stage_val,
+    resolve_pass_thresholds(pass_mse, final_stage_val),
+  )
   summary = trainer.trial_summary(
     rid=rid,
     cfg=cfg,
@@ -260,12 +305,29 @@ def complete_trial(
   )
 
 
-def clears_pass_bar(stage_losses: list[StageValLoss], threshold: float) -> bool:
-  """True when every stage val MSE is finite and at or below ``threshold``."""
+def resolve_pass_thresholds(
+  pass_mse: float | Mapping[int, float],
+  stage_losses: list[StageValLoss],
+) -> dict[int, float]:
+  """Scalar pass bar broadcast to each stage row; mapping used as-is."""
+  if isinstance(pass_mse, Mapping):
+    return {int(k): float(v) for k, v in pass_mse.items()}
+  th = float(pass_mse)
+  return {int(row.stage): th for row in stage_losses}
+
+
+def clears_pass_bar(
+  stage_losses: list[StageValLoss],
+  thresholds: Mapping[int, float],
+) -> bool:
+  """True when each stage val MSE is finite and at or below its threshold."""
   if not stage_losses:
     return False
   for row in stage_losses:
-    if not np.isfinite(row.mse) or row.mse > threshold:
+    th = thresholds.get(int(row.stage))
+    if th is None:
+      return False
+    if not np.isfinite(row.mse) or row.mse > float(th):
       return False
   return True
 
@@ -312,7 +374,7 @@ class StrategyTrainer(ABC):
       "mean_val_mse": mean_val,
       "stage_val_mse": stage_val_dict(stage_val),
       "passes_stage_pass_mse": passes,
-      "stage_pass_mse": float(cfg["stage_pass_mse"]),
+      "stage_pass_mse": cfg["stage_pass_mse"],
       "n_params": n_params,
       "epochs_run": epochs_run,
       "global_step": global_step,
@@ -398,7 +460,8 @@ class MixedPoolTrainer(StrategyTrainer):
       )
       epochs_run = epoch + 1
       global_step += metrics.steps
-      persist_epoch_artifacts(
+      finish_logged_epoch(
+        epoch_t0=epoch_t0,
         run_dir=run_dir,
         ckpt_dir=ckpt_dir,
         model=model,
@@ -410,16 +473,16 @@ class MixedPoolTrainer(StrategyTrainer):
         train_loss=metrics.train_loss,
         mean_val=metrics.mean_val,
         stage_val=metrics.stage_val,
-      )
-      log_epoch_metrics(
-        epoch=epochs_run,
-        epochs_cap=epochs_cap,
-        train_loss=metrics.train_loss,
-        mean_val=metrics.mean_val,
-        best_val=tracker.best_mean,
-        stale_epochs=tracker.stale_epochs,
-        stage_val=metrics.stage_val,
-        epoch_seconds=time.perf_counter() - epoch_t0,
+        log_fn=lambda secs: log_epoch_metrics(
+          epoch=epochs_run,
+          epochs_cap=epochs_cap,
+          train_loss=metrics.train_loss,
+          mean_val=metrics.mean_val,
+          best_val=tracker.best_mean,
+          stale_epochs=tracker.stale_epochs,
+          stage_val=metrics.stage_val,
+          epoch_seconds=secs,
+        ),
       )
 
       if tracker.should_stop(patience):
@@ -449,25 +512,6 @@ def parse_stage_list(text: str) -> list[int]:
   return [int(p.strip()) for p in text.split(",") if p.strip()]
 
 
-def train_cfg_from_smoke(
-  preset: dict[str, Any],
-  *,
-  model_name: str,
-  seed: int | None = None,
-) -> tuple[dict[str, Any], str | None]:
-  """Merge ``configs/smoke`` train block onto ``configs/models/<model_name>.yaml``."""
-  train = dict(preset["train"])
-  train.pop("model", None)
-  device = train.pop("device", None)
-  if device is not None and not isinstance(device, str):
-    device = None
-  cfg = load_model_config(model_name)
-  cfg.update(train)
-  if seed is not None:
-    cfg["seed"] = int(seed)
-  return cfg, device
-
-
 def require_stage_pools(data_root: Path, stages: Sequence[int]) -> None:
   missing: list[str] = []
   for stage in stages:
@@ -477,7 +521,7 @@ def require_stage_pools(data_root: Path, stages: Sequence[int]) -> None:
         missing.append(str(path))
   if missing:
     raise FileNotFoundError(
-      "missing pool files (run generate_smoke_data first):\n  "
+      "missing pool files (run generate_data <preset> first):\n  "
       + "\n  ".join(missing)
     )
 

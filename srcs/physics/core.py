@@ -148,10 +148,9 @@ def rk4_step(y: NDArray[np.float64], p: PendulumParams, dt: float) -> NDArray[np
   return y + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
 
 
-def wrap_angle(theta: float) -> float:
+def wrap_angle(theta):
   """Wrap scalar angle to (-pi, pi] (project `angle_wrap: negpi_pi`)."""
-  return float((theta + np.pi) % (2.0 * np.pi) - np.pi)
-
+  return (theta + np.pi) % (2.0 * np.pi) - np.pi
 
 def wrap_state(state: PendulumState) -> PendulumState:
   """Return state with theta1, theta2 wrapped; omegas unchanged."""

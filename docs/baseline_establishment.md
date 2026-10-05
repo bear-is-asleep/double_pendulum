@@ -11,13 +11,13 @@ Lock **FC width, depth, train subsample k, LR, batch** before curriculum / activ
 | `configs/models/baseline.yaml`       | `baseline_search` grid (width, depth, k)            |
 | `configs/baseline_lock.yaml`         | Frozen knobs + winning `run_id` after search        |
 | `srcs/simulation/generate_pools.py`  | Shared pool generation API                          |
-| `srcs/simulation/generate_data.py`   | Full/custom pool CLI                                |
-| `configs/smoke/*.yaml`               | Paired data + train smoke presets                   |
-| `srcs/simulation/generate_smoke_data.py` | Write pools from smoke YAML                         |
+| `srcs/simulation/generate_data.py`   | Data YAML pools or train job stages + paired data stem |
+| `configs/data/*.yaml`                | Sampler bounds, per-stage pool sizes, `val_fraction` |
+| `configs/train/*.yaml`               | Training job: paths, stages, train overrides          |
 | `srcs/train/epoch.py`                | Shared train/eval epoch helpers (Step 9 reuses)     |
 | `srcs/train/baseline.py`             | One trial train + per-stage val + `runs/` artifacts |
 | `srcs/train/baseline_search.py`      | CLI grid search → updates lock file                 |
-| `srcs/train/__main__.py`             | ``python -m srcs.train`` (``--smoke`` presets)        |
+| `srcs/train/__main__.py`             | ``python -m srcs.train`` (``--config small|full``)  |
 | `srcs/train/registry.py`             | Model YAML stem → trainer class                       |
 
 
@@ -42,21 +42,23 @@ Each trial writes `runs/<run_id>/` with `config.yaml`, `metrics.jsonl`, `summary
 | Step | Command | Typical time |
 | --- | --- | --- |
 | Unit smoke | `python -m pytest tests/test_baseline.py -q` | Under ~10 s |
-| Data | `python -m srcs.simulation.generate_smoke_data small` | Under ~30 s |
-| Train | `python -m srcs.train --smoke small --force` | Under ~30 s |
-| Sanity data | `python -m srcs.simulation.generate_smoke_data sanity` | ~1–2 min |
-| Sanity train | `python -m srcs.train --smoke sanity --force` | ~3–8 min CPU |
+| Data | `python -m srcs.simulation.generate_data small` | Under ~30 s |
+| Train | `python -m srcs.train --config small --force` | Under ~30 s |
+| Full job data | `python -m srcs.simulation.generate_data full` | ~1–2 min |
+| Full job train | `python -m srcs.train --config full --force` | ~3–8 min CPU |
 
 ```bash
 python -m pytest tests/test_baseline.py -q
 
-python -m srcs.simulation.generate_smoke_data small
-python -m srcs.train --smoke small --force
+python -m srcs.simulation.generate_data small
+python -m srcs.train --config small --force
 
-python -m srcs.simulation.generate_smoke_data sanity
-python -m srcs.train --smoke sanity --force
-python -m srcs.train --smoke sanity --model curriculum --force
+python -m srcs.simulation.generate_data full
+python -m srcs.train --config full --force
+python -m srcs.train --config full --model curriculum --force
 ```
+
+Curriculum (`configs/models/curriculum.yaml`) uses cumulative train mix on stages `0..s`, val only on stages in that mix, and `mix_weighted_val_mse` to ramp the `(s-1)` / `s` pair between `mix_val_mse_min` (favor stage `s`) and `mix_val_mse_max` (favor stage `s-1`). Each segment runs until `max_epochs_per_stage`, segment `early_stop_patience`, or (non-final segments only) target-stage val MSE clears `stage_pass_mse`. Metrics rows log `train_stage_fraction` each epoch.
 
 Plots (separate from train):
 
@@ -69,7 +71,7 @@ python -m srcs.visualization.plots eval \
   --metrics runs/baseline_small/baseline_w512_d2_k4_seed0_5m/metrics.jsonl
 ```
 
-`small` preset uses `val_fraction=0.25` so tiny val pools are non-empty. Full grid search:
+`data/sanity` uses `val_fraction=0.25` so tiny val pools are non-empty. Full grid search:
 
 ```bash
 python -m srcs.train.baseline_search --data-root data --runs-root runs

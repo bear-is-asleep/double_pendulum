@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from numpy.typing import NDArray
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 from srcs.simulation.data import PoolData, open_pool
 from srcs.simulation.sampler import stage_id_bounds
@@ -99,6 +99,55 @@ def load_mixed_xy(
 def curriculum_stage_ids(sampler_cfg: dict) -> list[int]:
   lo, hi = stage_id_bounds(sampler_cfg)
   return list(range(lo, hi + 1))
+
+
+def make_weighted_stage_loader(
+  stage_xy: dict[int, tuple[NDArray[np.float64], NDArray[np.float64]]],
+  fractions: dict[int, float],
+  *,
+  batch_size: int,
+  seed: int,
+  eps: float = 1.0e-12,
+) -> DataLoader:
+  """
+  Sample train rows with probability proportional to per-stage ``fractions``.
+
+  Each row in stage ``s`` gets weight ``fractions[s] / n_rows_s``.
+  """
+  active = [s for s, f in fractions.items() if f > eps and s in stage_xy]
+  if not active:
+    raise ValueError("no active stages with training data")
+  xs: list[NDArray[np.float64]] = []
+  ys: list[NDArray[np.float64]] = []
+  weights: list[float] = []
+  for stage in sorted(active):
+    x, y = stage_xy[stage]
+    n = int(x.shape[0])
+    if n == 0:
+      continue
+    frac = float(fractions[stage])
+    row_w = frac / n
+    xs.append(x)
+    ys.append(y)
+    weights.extend([row_w] * n)
+  if not xs:
+    raise ValueError("empty training set across active stages")
+  x_all = np.concatenate(xs, axis=0)
+  y_all = np.concatenate(ys, axis=0)
+  w_t = torch.as_tensor(weights, dtype=torch.double)
+  gen = torch.Generator()
+  gen.manual_seed(int(seed))
+  sampler = WeightedRandomSampler(
+    w_t,
+    num_samples=int(x_all.shape[0]),
+    replacement=True,
+    generator=gen,
+  )
+  ds = TensorDataset(
+    torch.from_numpy(x_all.astype(np.float32, copy=False)),
+    torch.from_numpy(y_all.astype(np.float32, copy=False)),
+  )
+  return DataLoader(ds, batch_size=int(batch_size), sampler=sampler)
 
 
 def make_loader(

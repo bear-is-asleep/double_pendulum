@@ -7,9 +7,11 @@ strategy: baseline
 input_dim: 8
 # Heads: sin/cos theta1, sin/cos theta2, omega1, omega2
 output_dim: 6
-hidden_width: 128
-hidden_depth: 3
+# int = same width every hidden layer; list length must match hidden_depth
+hidden_width: [128, 64]
+hidden_depth: 2
 activation: tanh
+
 
 lr: 0.001
 batch_size: 256
@@ -17,11 +19,10 @@ subsample_stride_k: 4
 loss_weight_theta: 1.0
 loss_weight_omega: 0.25
 seed: 0
-max_epochs: 200
+max_epochs: 100
+
+stage_pass_mse: 1e-9
 early_stop_patience: 20
-val_fraction: 0.1
-# Per-stage val loss bar for curriculum / baseline "clears stage"
-stage_pass_mse: 0.01
 
 # Active overrides n_ensemble in active.yaml
 n_ensemble: 1

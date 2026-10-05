@@ -1,17 +1,25 @@
-"""Step 7: curriculum strategy (sequential stages, single-stage train pools)."""
+"""Step 7: curriculum strategy (cumulative mix, scoped val)."""
 
 from __future__ import annotations
 
 import copy
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 
-from srcs.loader import load_model_config, load_sampler_config
+from srcs.loader import load_model_config, load_sampler_config, sampler_val_fraction
 from srcs.simulation.data import build_pool, carve_validation, pool_path, save_pool
 from srcs.train.base import clears_pass_bar
-from srcs.train.curriculum import CurriculumTrainer, should_advance_curriculum_stage
+from srcs.train.curriculum import (
+  CurriculumTrainer,
+  epochs_per_stage_cap,
+  format_curriculum_stage_line,
+  should_advance_curriculum_stage,
+)
+from srcs.train.base import StageValLoss
+from srcs.train.curriculum_mix import resolve_stage_pass_mse
 
 
 def _tiny_sampler_cfg() -> dict:
@@ -46,11 +54,46 @@ def _write_tiny_stage_pools(
     save_pool(pool_path(data_root, stage, "val"), val, overwrite_frozen=True)
 
 
+def test_epochs_per_stage_cap_prefers_max_epochs_per_stage() -> None:
+  cfg = {"max_epochs": 100, "max_epochs_per_stage": 50}
+  assert epochs_per_stage_cap(cfg) == 50
+  assert epochs_per_stage_cap({"max_epochs": 100}) == 100
+
+
 def test_should_advance_curriculum_stage() -> None:
-  assert should_advance_curriculum_stage(0.5, 1.0, 0, 5, 1, 10)
-  assert should_advance_curriculum_stage(2.0, 1.0, 5, 5, 3, 10)
-  assert should_advance_curriculum_stage(2.0, 1.0, 0, 5, 10, 10)
-  assert not should_advance_curriculum_stage(2.0, 1.0, 2, 5, 3, 10)
+  assert not should_advance_curriculum_stage(0, 5, 1, 10)
+  assert should_advance_curriculum_stage(5, 5, 3, 10)
+  assert should_advance_curriculum_stage(0, 5, 10, 10)
+  assert not should_advance_curriculum_stage(2, 5, 3, 10)
+  val = [StageValLoss(stage=0, mse=0.18)]
+  assert should_advance_curriculum_stage(
+    0,
+    5,
+    3,
+    10,
+    stage_val=val,
+    target_stage=0,
+    pass_mse_for_target=0.2,
+  )
+  assert not should_advance_curriculum_stage(
+    0,
+    5,
+    3,
+    10,
+    stage_val=val,
+    target_stage=0,
+    pass_mse_for_target=0.15,
+  )
+  assert not should_advance_curriculum_stage(
+    0,
+    5,
+    1,
+    100,
+    stage_val=val,
+    target_stage=1,
+    pass_mse_for_target=0.2,
+    allow_pass_mse_advance=False,
+  )
 
 
 def test_curriculum_trial_writes_run_dir(tmp_path: Path) -> None:
@@ -60,7 +103,7 @@ def test_curriculum_trial_writes_run_dir(tmp_path: Path) -> None:
   _write_tiny_stage_pools(
     data_root,
     sampler,
-    val_fraction=float(cfg["val_fraction"]),
+    val_fraction=sampler_val_fraction(sampler),
     stages=(0, 1),
   )
 
@@ -81,18 +124,26 @@ def test_curriculum_trial_writes_run_dir(tmp_path: Path) -> None:
     runs_root=runs_root,
     run_id="curriculum_w24_d1_k2_seed0_smoke",
     device_name="cpu",
-    max_epochs=2,
   )
   assert res.run_dir.is_dir()
   assert (res.run_dir / "metrics.jsonl").exists()
   summary = json.loads((res.run_dir / "summary.json").read_text(encoding="utf-8"))
+  assert summary.get("max_epochs_per_stage") == 2
   assert summary["experiment"] == "curriculum"
   assert summary["curriculum_last_stage"] == 1
   assert summary["strategy"] == "curriculum"
   assert all(np.isfinite(row.mse) for row in res.stage_val)
-  assert clears_pass_bar(list(res.stage_val), trial["stage_pass_mse"])
+  thresholds = resolve_stage_pass_mse(trial, [0, 1])
+  assert clears_pass_bar(list(res.stage_val), thresholds)
 
   lines = (res.run_dir / "metrics.jsonl").read_text(encoding="utf-8").strip().split("\n")
   records = [json.loads(line) for line in lines if line]
-  stages_seen = {r["curriculum_stage"] for r in records}
-  assert stages_seen == {0, 1}
+  targets_seen = {r["curriculum_target_stage"] for r in records}
+  assert targets_seen == {0, 1}
+  for row in records:
+    fr = row["train_stage_fraction"]
+    assert math.isclose(sum(float(v) for v in fr.values()), 1.0, rel_tol=1e-5)
+    assert "mix_weighted_val_mse" in row
+    target = int(row["curriculum_target_stage"])
+    val_stages = {int(k) for k in row["stage_val_mse"]}
+    assert val_stages <= set(range(0, target + 1))

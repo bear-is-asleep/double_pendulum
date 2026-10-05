@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from srcs.loader import (
-  list_model_configs,
-  list_smoke_presets,
-  load_model_config,
+  DEFAULT_CONFIG_STEM,
+  list_configs,
+  load_train_config,
   load_sampler_config,
-  load_smoke_preset,
+  paired_data_config,
+  sampler_val_fraction,
 )
 from srcs.simulation.sampler import stage_id_bounds
 
@@ -42,35 +43,13 @@ SAMPLER_REQUIRED = {
   "stage5",
   "stage6",
   "pools",
-}
-
-MODEL_REQUIRED = {
-  "name",
-  "strategy",
-  "model_type",
-  "input_dim",
-  "output_dim",
-  "hidden_width",
-  "hidden_depth",
-  "activation",
-  "lr",
-  "batch_size",
-  "subsample_stride_k",
-  "loss_weight_theta",
-  "loss_weight_omega",
-  "seed",
-  "max_epochs",
-  "early_stop_patience",
   "val_fraction",
-  "stage_pass_mse",
-  "n_ensemble",
 }
-
 
 def test_sampler_yaml_loads() -> None:
   cfg = load_sampler_config()
   missing = SAMPLER_REQUIRED - cfg.keys()
-  assert not missing, f"sampler.yaml missing keys: {sorted(missing)}"
+  assert not missing, f"data/full.yaml missing keys: {sorted(missing)}"
   assert "g_stage1" not in cfg
   lo, hi = stage_id_bounds(cfg)
   assert lo == 0
@@ -83,27 +62,68 @@ def test_sampler_yaml_loads() -> None:
   assert len(cfg["pools"]["train"]) == n_pools
 
 
-def test_smoke_presets_load() -> None:
-  names = list_smoke_presets()
+def test_data_configs_load() -> None:
+  names = list_configs("data")
+  assert "full" in names
   assert "small" in names
   assert "sanity" in names
-  for name in names:
-    preset = load_smoke_preset(name)
-    assert preset["name"] == name
-    assert preset["data"]["train_per_stage"] >= 1
-    assert preset["train"]["model"] == "baseline"
+  full = load_sampler_config(data_config="full")
+  small = load_sampler_config(data_config="small")
+  assert full["pools"]["train"] != small["pools"]["train"]
+  assert small["pools"]["train"][0] < full["pools"]["train"][0]
 
 
-def test_model_configs_merge() -> None:
-  names = list_model_configs()
-  assert names == ["active", "baseline", "curriculum", "progressive"]
+def test_train_job_configs_load() -> None:
+  names = list_configs("train")
+  assert "small" in names
   for name in names:
-    cfg = load_model_config(name)
-    missing = MODEL_REQUIRED - cfg.keys()
-    assert not missing, f"{name}.yaml missing after merge: {sorted(missing)}"
-  active = load_model_config("active")
-  assert active["n_ensemble"] == 2
-  assert active["lambda_start"] < active["lambda_end"]
-  prog = load_model_config("progressive")
-  assert prog["depth_start"] < prog["hidden_depth"]
-  assert prog["depth_grow_fracs"]
+    job = load_train_config(name)
+    assert job["stages"]
+    assert "data" not in job
+  assert load_train_config("small")["train"]["model"] == "baseline"
+  assert load_train_config("curriculum_small")["train"]["model"] == "curriculum"
+
+
+def test_paired_data_config() -> None:
+  assert paired_data_config("small", None) == "small"
+  assert paired_data_config("full", None) == "full"
+  assert paired_data_config("sanity", None) == "sanity"
+  assert paired_data_config("small", "full") == "full"
+  assert paired_data_config(None, None) == DEFAULT_CONFIG_STEM
+
+
+def test_pool_job_from_train_uses_data_yaml_sizes() -> None:
+  from srcs.simulation.generate_pools import PoolGenerateJob
+
+  job = PoolGenerateJob.from_train_job(
+    load_train_config("small"),
+    data_config="small",
+    train_stem="small",
+  )
+  assert job.train_counts is None
+  assert job.test_counts is None
+  assert job.stages == [0, 1]
+  small = load_sampler_config(data_config="small")
+  assert sampler_val_fraction(small) == 0.2
+
+
+def test_pool_job_sanity_pairs_tiny_data_yaml() -> None:
+  from srcs.simulation.generate_pools import PoolGenerateJob
+
+  job = PoolGenerateJob.from_train_job(
+    load_train_config("sanity"),
+    data_config=paired_data_config("sanity", None),
+    train_stem="sanity",
+  )
+  assert job.data_config == "sanity"
+  sanity = load_sampler_config(data_config="sanity")
+  assert sanity["pools"]["train"][0] == 4
+
+
+def test_generate_data_accepts_sampler_cfg_flag() -> None:
+  from srcs.simulation.generate_data import build_parser
+
+  args = build_parser().parse_args(
+    ["--data-root", "data/x", "--data-config", "small", "--overwrite-frozen"]
+  )
+  assert args.data_config == "small"

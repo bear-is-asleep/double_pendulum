@@ -7,7 +7,7 @@ import copy
 import numpy as np
 import pytest
 
-from srcs.loader import load_model_config, load_sampler_config
+from srcs.loader import load_sampler_config
 from srcs.simulation.data import (
   FrozenPoolError,
   build_pool,
@@ -117,14 +117,13 @@ def test_frozen_refuse_overwrite(tmp_path) -> None:
 
 def test_generate_stage_writes_three_splits(tmp_path) -> None:
   cfg = _tiny_sampler_cfg()
-  model = load_model_config("baseline")
   paths = generate_stage(
     2,
     tmp_path,
     cfg,
     train_n=6,
     test_n=2,
-    val_fraction=float(model["val_fraction"]),
+    val_fraction=0.1,
     rng=np.random.default_rng(8),
   )
   assert set(paths) == {"train", "val", "test"}

@@ -1,5 +1,22 @@
 name: curriculum_ann
 strategy: curriculum
 
-# Per curriculum stage; defaults to base max_epochs when omitted
-max_epochs_per_stage: 200
+# Per-stage val MSE pass bar; ends segment early except on the last stage in the job.
+stage_pass_mse:
+  - 0.2
+  - 0.2
+  - 0.2
+  - 0.2
+  - 0.2
+  - 0.2
+  - 0.2
+
+# Ramp (s-1) vs s remainder from weighted val: min MSE -> all s, max MSE -> all s-1.
+mix_val_mse_min: 0.05
+mix_val_mse_max: 0.3
+
+# Total train mass on stages 0..s-2 (split evenly) while introducing stage s.
+passed_stage_min_fraction: 0.05
+
+early_stop_patience: 5
+max_epochs_per_stage: 25

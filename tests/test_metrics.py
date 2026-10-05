@@ -10,9 +10,15 @@ import pytest
 
 from srcs.eval.channels import CHANNEL_KEYS, per_step_channel_abs_errors
 from srcs.visualization.eval_figures import (
+  cumulative_train_seconds_series,
+  metrics_has_curriculum_mix,
+  plot_cumulative_train_time,
+  plot_curriculum_stage_mix,
   plot_error_vs_t,
   plot_summary_stages,
   plot_training_curves,
+  render_eval_figures,
+  stage_fraction_series,
 )
 from srcs.eval.pool_eval import EvalTestResult, weighted_loss_per_step, write_eval_artifacts
 from srcs.eval.run_layout import RunEvalLayout
@@ -113,6 +119,123 @@ def test_eval_figure_fixtures(tmp_path: Path) -> None:
   for name in ("train.png", "err.png", "sum.png"):
     p = tmp_path / name
     assert p.is_file() and p.stat().st_size > 200
+
+
+def test_stage_fraction_series_sums_to_one(tmp_path: Path) -> None:
+  rows = [
+    {"epoch": 1, "train_stage_fraction": {"0": 1.0}},
+    {"epoch": 2, "train_stage_fraction": {"0": 0.6, "1": 0.4}},
+    {"epoch": 3, "train_stage_fraction": {"0": 0.2, "1": 0.8}},
+  ]
+  assert metrics_has_curriculum_mix(rows)
+  _, stages, mat = stage_fraction_series(rows)
+  assert stages == [0, 1]
+  for col in range(mat.shape[1]):
+    assert np.isclose(mat[:, col].sum(), 1.0, rtol=1e-5)
+
+
+def test_plot_curriculum_stage_mix_smoke(tmp_path: Path) -> None:
+  metrics = tmp_path / "metrics.jsonl"
+  lines = [
+    {"epoch": 1, "train_loss": 1.0, "train_stage_fraction": {"0": 1.0}},
+    {"epoch": 2, "train_loss": 0.8, "train_stage_fraction": {"0": 0.5, "1": 0.5}},
+    {"epoch": 3, "train_loss": 0.6, "train_stage_fraction": {"0": 0.1, "1": 0.9}},
+  ]
+  metrics.write_text(
+    "\n".join(json.dumps(row) for row in lines) + "\n",
+    encoding="utf-8",
+  )
+  out = plot_curriculum_stage_mix(metrics, tmp_path / "mix.png")
+  assert out.is_file() and out.stat().st_size > 400
+
+
+def test_plot_training_curves_overlays_curriculum_mix(tmp_path: Path) -> None:
+  no_mix = tmp_path / "no_mix.jsonl"
+  no_mix.write_text(
+    '{"epoch": 1, "train_loss": 0.5, "mean_val_mse": 0.6}\n',
+    encoding="utf-8",
+  )
+  with_mix = tmp_path / "with_mix.jsonl"
+  with_mix.write_text(
+    "\n".join(
+      json.dumps(row)
+      for row in (
+        {"epoch": 1, "train_loss": 0.5, "mean_val_mse": 0.6, "train_stage_fraction": {"0": 1.0}},
+        {
+          "epoch": 2,
+          "train_loss": 0.3,
+          "mean_val_mse": 0.4,
+          "train_stage_fraction": {"0": 0.5, "1": 0.5},
+        },
+      )
+    )
+    + "\n",
+    encoding="utf-8",
+  )
+  plot_training_curves(no_mix, tmp_path / "plain.png", val_key="mean_val_mse")
+  overlay = plot_training_curves(with_mix, tmp_path / "overlay.png", val_key="mean_val_mse")
+  assert overlay.is_file() and overlay.stat().st_size > 400
+
+
+def test_cumulative_train_seconds_series() -> None:
+  rows = [
+    {"epoch": 1, "epoch_seconds": 10.0},
+    {"epoch": 2, "epoch_seconds": 5.0},
+    {"epoch": 3, "epoch_seconds": 2.5},
+  ]
+  _, cum = cumulative_train_seconds_series(rows)
+  assert np.allclose(cum, [10.0, 15.0, 17.5])
+
+
+def test_plot_cumulative_train_time_smoke(tmp_path: Path) -> None:
+  metrics = tmp_path / "metrics.jsonl"
+  metrics.write_text(
+    "\n".join(
+      json.dumps(row)
+      for row in (
+        {"epoch": 1, "epoch_seconds": 12.0},
+        {"epoch": 2, "epoch_seconds": 8.0},
+      )
+    )
+    + "\n",
+    encoding="utf-8",
+  )
+  out = plot_cumulative_train_time(metrics, tmp_path / "time.png")
+  assert out.is_file() and out.stat().st_size > 300
+
+
+def test_render_eval_figures_includes_cumulative_time(tmp_path: Path) -> None:
+  run = tmp_path / "run"
+  run.mkdir()
+  metrics = run / "metrics.jsonl"
+  metrics.write_text(
+    '{"epoch": 1, "train_loss": 1.0, "epoch_seconds": 3.0}\n',
+    encoding="utf-8",
+  )
+  paths = render_eval_figures(out_dir=tmp_path / "fig", metrics_path=metrics)
+  assert any(p.name == "cumulative_train_time.png" for p in paths)
+
+
+def test_render_eval_figures_curriculum_mix_on_training_png(tmp_path: Path) -> None:
+  baseline = tmp_path / "baseline"
+  baseline.mkdir()
+  baseline_metrics = baseline / "metrics.jsonl"
+  baseline_metrics.write_text('{"epoch": 1, "train_loss": 1.0}\n', encoding="utf-8")
+  base_paths = render_eval_figures(out_dir=tmp_path / "fig_baseline", metrics_path=baseline_metrics)
+  assert any(p.name == "training.png" for p in base_paths)
+  assert not any(p.name == "curriculum_stage_mix.png" for p in base_paths)
+
+  curr = tmp_path / "curr"
+  curr.mkdir()
+  curr_metrics = curr / "metrics.jsonl"
+  curr_metrics.write_text(
+    '{"epoch": 1, "train_loss": 1.0, "train_stage_fraction": {"0": 1.0}}\n',
+    encoding="utf-8",
+  )
+  curr_paths = render_eval_figures(out_dir=tmp_path / "fig_curr", metrics_path=curr_metrics)
+  train = [p for p in curr_paths if p.name == "training.png"]
+  assert len(train) == 1 and train[0].is_file()
+  assert not any(p.name == "curriculum_stage_mix.png" for p in curr_paths)
 
 
 def test_plot_summary_from_eval_summary(tmp_path: Path) -> None:

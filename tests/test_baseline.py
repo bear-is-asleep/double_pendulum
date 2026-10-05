@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 import torch
 
-from srcs.loader import load_baseline_lock, load_model_config, load_sampler_config
-from srcs.train.base import clears_pass_bar
+from srcs.loader import load_model_config, load_sampler_config
+from srcs.train.base import clears_pass_bar, resolve_pass_thresholds
 from srcs.train.baseline import BaselineTrainer, iter_search_grid
 from srcs.simulation.data import build_pool, carve_validation, pool_path, save_pool
 from srcs.model import build_mlp, weighted_surrogate_loss
@@ -95,7 +95,10 @@ def test_baseline_trial_writes_run_dir(tmp_path: Path) -> None:
   assert (res.run_dir / "checkpoints" / "best.pt").exists()
   summary = json.loads((res.run_dir / "summary.json").read_text(encoding="utf-8"))
   assert summary["run_id"] == res.run_id
-  assert clears_pass_bar(list(res.stage_val), trial["stage_pass_mse"])
+  assert clears_pass_bar(
+    list(res.stage_val),
+    resolve_pass_thresholds(trial["stage_pass_mse"], list(res.stage_val)),
+  )
 
 
 def test_baseline_search_grid_yields_combos() -> None:
@@ -137,7 +140,7 @@ def test_baseline_search_smoke_trial(tmp_path: Path) -> None:
   _write_tiny_stage_pools(
     data_root,
     sampler_cfg,
-    val_fraction=float(model_cfg["val_fraction"]),
+    val_fraction=0.1,
   )
 
   trial_cfg = dict(model_cfg)
@@ -159,10 +162,3 @@ def test_baseline_search_smoke_trial(tmp_path: Path) -> None:
   )
   assert res.run_dir.name == "baseline_w32_d1_k2_seed0_smoke"
   assert (res.run_dir / "checkpoints" / "last.pt").exists()
-
-
-def test_baseline_lock_loads() -> None:
-  lock = load_baseline_lock()
-  assert lock["hidden_width"] == 128
-  assert lock["subsample_stride_k"] == 4
-  assert "stage_pass_mse" in lock

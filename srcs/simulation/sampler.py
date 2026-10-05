@@ -1,6 +1,6 @@
 """Stage-aware IC / parameter sampler with probe-sim accept-reject.
 
-Reads bounds from ``configs/sampler.yaml`` (pass the loaded dict as ``cfg``).
+Reads bounds from ``configs/data/*.yaml`` (pass the loaded dict as ``cfg``).
 Each accepted row is one trajectory's initial conditions plus masses, length, and g.
 
 Row fields (``SampleRow``): theta1, theta2, omega1, omega2, m1, m2, l, g.

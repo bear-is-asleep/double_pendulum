@@ -19,8 +19,14 @@ class MlpTrainerMixin:
     return count_parameters(model)
 
   def extra_summary_fields(self, cfg: dict[str, Any]) -> dict[str, Any]:
+    raw = cfg["hidden_width"]
+    width_field: int | list[int]
+    if isinstance(raw, (list, tuple)):
+      width_field = [int(x) for x in raw]
+    else:
+      width_field = int(raw)
     return {
-      "hidden_width": int(cfg["hidden_width"]),
+      "hidden_width": width_field,
       "hidden_depth": int(cfg["hidden_depth"]),
       "strategy": str(cfg.get("strategy", "")),
     }

@@ -62,9 +62,20 @@ Eval figure CLI infers sibling `summary.json`, `eval_test/*.npz`, and writes `fi
 Expected inputs:
 
 - `metrics.jsonl` — `epoch`, `train_loss` (line), `mean_val_mse` (scatter on training plot)
+- `metrics.jsonl` — `epoch_seconds` per row; `cumulative_train_time.png` plots the running sum vs epoch
+- `metrics.jsonl` with `train_stage_fraction` — `training.png` shades stage mix behind loss curves (same epoch axis)
 - `eval_test/error_vs_t.npz` — `t`, `error` `(n_stage, n_t)`, `stage_ids` (bar chart per stage, not line overlay)
 - `eval_test/channel_mae_vs_t.npz` — per-channel mean |error| vs `t`
 - `eval_test/eval_summary.json` — `test_stage_mse` for summary bars; else `summary.json` `stage_val_mse` filtered by `stages`
+
+**Compare runs (2+ models)** — YAML under `configs/vis/` lists `run_dir` per model. Reads on-disk `metrics.jsonl` and `eval_test/` only (no checkpoint re-eval). Overlays curves into `figures/compare_<name>/` (or `out_dir` in YAML):
+
+```bash
+python -m srcs.visualization.compare_runs --name baseline_vs_curriculum
+python -m srcs.visualization.compare_runs --config configs/vis/baseline_vs_curriculum.yaml
+```
+
+Each entry needs `label` and `run_dir` (resolved like single-run layout). Outputs: `training.png`, `cumulative_train_time.png`, `stage_val_mse.png`, `error_vs_t.png`, `channel_mae_vs_t.png`, `summary_stages.png`. Test-pool NPZ files must share the same `t` grid across models or the CLI errors with a clear message.
 
 ## Layout of Python modules
 
@@ -73,6 +84,7 @@ srcs/viz.py      SVG + shared CSS (no NiceGUI)
 srcs/sources.py  TrajectorySource, GroundTruthSource, SurrogateSource
 srcs/visualization/plots.py   trajectory PNG/gif CLI
 srcs/visualization/eval_figures.py  training/eval metric PNGs
+srcs/visualization/compare_runs.py  multi-run overlay figures from configs/vis
 srcs/eval/pool_eval.py        test-pool NPZ + JSON metrics (CLI: python -m srcs.eval)
 tests/test_metrics.py         pytest for eval metrics and figures
 app.py                      live RK4 UI

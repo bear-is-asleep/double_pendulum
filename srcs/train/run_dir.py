@@ -24,6 +24,13 @@ __all__ = [
 ]
 
 
+def _hidden_width_run_tag(cfg: dict[str, Any]) -> str:
+  raw = cfg["hidden_width"]
+  if isinstance(raw, (list, tuple)):
+    return "w" + "x".join(str(int(x)) for x in raw)
+  return f"w{int(raw)}"
+
+
 def strategy_run_id(
   cfg: dict[str, Any],
   strategy: str,
@@ -33,7 +40,7 @@ def strategy_run_id(
   """Filesystem-safe id: strategy + locked architecture / train knobs."""
   parts = [
     strategy,
-    f"w{int(cfg['hidden_width'])}",
+    _hidden_width_run_tag(cfg),
     f"d{int(cfg['hidden_depth'])}",
     f"k{int(cfg['subsample_stride_k'])}",
     f"seed{int(cfg['seed'])}",

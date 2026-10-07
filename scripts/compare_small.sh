@@ -1,0 +1,1 @@
+python -m srcs.visualization.compare_runs --name baseline_vs_curriculum_small

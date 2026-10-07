@@ -1,5 +1,7 @@
 # Shared ANN + train defaults. Strategy YAMLs overlay these keys.
+# ``train.model: baseline`` loads this file only (no separate baseline.yaml).
 
+name: baseline_ann
 model_type: mlp
 strategy: baseline
 
@@ -11,6 +13,8 @@ output_dim: 6
 hidden_width: [128, 64]
 hidden_depth: 2
 activation: tanh
+# Hidden activation dropout during train; 0 disables (no extra modules, old ckpts compatible)
+dropout: 0.2
 
 
 lr: 0.001

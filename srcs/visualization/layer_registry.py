@@ -10,15 +10,15 @@ from numpy.typing import NDArray
 from srcs.physics.core import PendulumParams
 from srcs.simulation.data import TrajectoryView
 from srcs.visualization.comparison_data import (
-  CHART_LAYER_COLOR_SETS,
   LayerSeries,
   ReferenceSeries,
+  nn_trace_colors,
   reference_from_ground_truth,
 )
 from srcs.visualization.sources import GroundTruthSource
 from srcs.visualization.surrogate import (
   STORED_LAYER_ID,
-  OVERLAY_PALETTES,
+  NN_OVERLAY_STYLE,
   SurrogateSource,
   series_from_pred,
 )
@@ -82,14 +82,13 @@ class PoolComparisonContext:
         trail=trail,
       )
 
-    for i, sur in enumerate(self.surrogates):
+    for sur in self.surrogates:
       lid = sur.layer_id()
       if not self.visible.get(lid, True):
         continue
       trail = sur.tip_trail(k, self.view, p, self.cache_key) if show_trail else ()
       state = sur.frame_state(k, self.view, self.cache_key)
-      pal = OVERLAY_PALETTES[i % len(OVERLAY_PALETTES)]
-      style = LayerStyle(dashed=True, **pal)
+      style = LayerStyle(dashed=True, **NN_OVERLAY_STYLE)
       overlays.append((PendulumFrame(params=p, state=state, trail=trail), style))
 
     return primary, overlays
@@ -102,10 +101,10 @@ class PoolComparisonContext:
     t = ref.t
     p = self.params()
     layers: list[LayerSeries] = []
-    for i, sur in enumerate(self.surrogates):
+    for sur in self.surrogates:
       pred = sur.predict_series(self.view, self.cache_key)
       arrays = series_from_pred(t, pred, p)
-      trace_colors = CHART_LAYER_COLOR_SETS[i % len(CHART_LAYER_COLOR_SETS)]
+      trace_colors = nn_trace_colors()
       layers.append(
         LayerSeries(
           layer_id=sur.layer_id(),

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Compare four training strategies for a vanilla MLP that learns double-pendulum trajectories under chaos. Citations live in `writeup/refs.bib`.
+Compare four training strategies for a vanilla MLP that learns double-pendulum trajectories under chaos. Citations live in `arXiv/refs.bib`.
 
 1. Baseline
 2. Curriculum
@@ -44,7 +44,7 @@ HNN / physics-structured models are **out of scope for now** (see Future directi
 
 - **Locked from baseline establishment:** FC width/depth, train subsample $k$, learning rate, batch size. Reuse for all four strategies.
 - **Allowed to float:** sample / trajectory budget used per run **and** epochs / early stopping. Report both. No forced equal-N across methods.
-- Active: **QbC-style** deep ensemble (`n_ensemble`, default **2**). Uncertainty = mean ensemble std over $t$ of the 6 heads. **Do not train on high-var only:** each draw mixes uniform vs uncertainty with weight $\lambda$ that **increases with epoch** (`lambda_start` → `lambda_end` in model YAML), so late training oversamples uncertain ICs more. Progressive = grow **depth** only (same locked width); schedule in that model YAML. Active query-loop details deferred.
+- Active: **QbC-style** deep ensemble (`n_ensemble`, default **2**) [@settles2009active; @lakshminarayanan2017simple] (MC-dropout uncertainty is an alternative [@gal2016dropout]). Uncertainty = mean ensemble std over $t$ of the 6 heads. **Do not train on high-var only:** each draw mixes uniform vs uncertainty with weight $\lambda$ that **increases with epoch** (`lambda_start` → `lambda_end` in model YAML), so late training oversamples uncertain ICs more. Progressive = grow **depth** only (same locked width); schedule in that model YAML. Active query-loop details deferred.
 
 
 
@@ -281,7 +281,7 @@ Index file optional: `runs/index.csv` with columns `run_id, experiment, status, 
 - Training curves plot (from `metrics.jsonl`; uses plot helpers from Step **4b**)
 - **Visualization (Step 4b, built before training):** interactive apps, gifs, time-series plots for ground-truth data; stage / split filters; sin/cos (not raw $\theta$), $\omega$, PE, KE
   - **Wiring only after NNs exist:** sim vs ANN overlay in app, surrogate trajectories from checkpoint loader (Step 8), eval error-vs-$t$ and training curves fed from Step 10 exports. No second viz stack at the end of the pipeline.
-- Citations: `writeup/refs.bib`
+- Citations: `arXiv/refs.bib`
 
 
 
@@ -514,6 +514,8 @@ Agents build **one step of the build order at a time**. Human (or a thin orchest
 - Combining multiple training strategies together
 - More masses (n-pendulum); mass count as input
 - Continuous curriculum (gravity ramp, PE, Lyapunov) [@vejendla2025chaos]
+- **Fourier feature encoding** on scalar $t$ (and optionally IC / params) before the MLP to reduce spectral bias in coordinate regression [@tancik2020fourier]; ablate scale vs raw $t$ on error-vs-$t$ curves
+- **GRU (and other sequence backbones, e.g. Transformer):** windowed or autoregressive forecasting on stored trajectories, following the chaos-curriculum setting in [@vejendla2025chaos] (their primary ablations use GRU). Same stage splits and metrics (valid prediction horizon + sin/cos MSE). Not a drop-in replacement for the locked one-shot MLP map $(t,\mathrm{IC})\to$ state without reformulating inputs and train batches
 - **HNN + energy regularization** (and CHNN / LNN / ModLaNet): deferred — correct $(q,p)$, parametric $m,g$, and map-vs-integrate eval [@greydanus2019hnn; @eichelsdoerfer2021physics; @finzi2020chnn; @cranmer2020lnn; @lu2022modlanets]
 - Sweep LR / batch (currently locked from baseline)
 - Force equal sample budgets across strategies (currently floating)

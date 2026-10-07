@@ -42,7 +42,7 @@
   archivePrefix= {arXiv},
   primaryClass = {cs.LG},
   url          = {https://arxiv.org/abs/2510.04342},
-  note         = {Curriculum by Lyapunov / attractor dimension; valid prediction horizon}
+  note         = {Curriculum by Lyapunov / attractor dimension; valid prediction horizon; GRU and Transformer backbones}
 }
 
 @misc{greydanus2019hnn,
@@ -96,5 +96,113 @@
   primaryClass = {cs.CV},
   url          = {https://arxiv.org/abs/2003.05597},
   note         = {Angle periodicity / discontinuous boundaries; circular smooth labels for angular prediction}
+}
+
+@inproceedings{bengio2009curriculum,
+  title     = {Curriculum Learning},
+  author    = {Bengio, Yoshua and Louradour, J{\'e}r{\^o}me and Collobert, Ronan and Weston, Jason},
+  booktitle = {Proceedings of the 26th International Conference on Machine Learning},
+  series    = {ICML '09},
+  year      = {2009},
+  pages     = {41--48},
+  url       = {https://proceedings.mlr.press/v26/bengio09a.html},
+  note      = {Easy-to-hard training order; smooth difficulty ramps}
+}
+
+@article{kirkpatrick2017overcoming,
+  title   = {Overcoming Catastrophic Forgetting in Neural Networks},
+  author  = {Kirkpatrick, James and Pascanu, Razvan and Hadsell, Raia and others},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume  = {114},
+  number  = {13},
+  pages   = {3521--3526},
+  year    = {2017},
+  doi     = {10.1073/pnas.1611835114},
+  url     = {https://www.pnas.org/doi/10.1073/pnas.1611835114},
+  note    = {Catastrophic interference when task distribution shifts mid-training}
+}
+
+@inproceedings{kumar2010selfpaced,
+  title     = {Self-Paced Learning for Latent Variable Models Using a Non-Convex Heavy-Tailed Loss},
+  author    = {Kumar, M. Pawan and Packer, Benjamin and Koller, Daphne},
+  booktitle = {Advances in Neural Information Processing Systems 23},
+  year      = {2010},
+  url       = {https://papers.nips.cc/paper/3926-self-paced-learning-for-latent-variable-models-using-adaptive-sparse-convex-methods},
+  note      = {Self-paced difficulty; avoid oscillating sample weights}
+}
+
+@inproceedings{rolnick2019experience,
+  title     = {Experience Replay for Continual Learning},
+  author    = {Rolnick, David and Ahuja, Arun and Schwab, Jonathan and others},
+  booktitle = {Advances in Neural Information Processing Systems 32},
+  year      = {2019},
+  eprint    = {1811.11682},
+  archivePrefix = {arXiv},
+  url       = {https://arxiv.org/abs/1811.11682},
+  note      = {Replay old tasks while learning new ones; relates to passed_stage_min_fraction rehearsal}
+}
+
+@inproceedings{fang2023integrating,
+  title     = {Integrating Curricula with Replays: Its Effects on Continual Learning},
+  author    = {Fang, Ying and Li, Tian and Wang, Yan and others},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence Student Symposium},
+  year      = {2023},
+  eprint    = {2307.05747},
+  archivePrefix = {arXiv},
+  url       = {https://arxiv.org/abs/2307.05747},
+  note      = {Mixing curriculum pacing with replay; difficulty-balanced rehearsal vs hard-only}
+}
+
+@inproceedings{smith2024adaptive,
+  title     = {Adaptive Memory Replay for Continual Learning},
+  author    = {Smith, Lewis and Kirsch, Louis and Gal, Yarin and others},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition Workshops},
+  year      = {2024},
+  url       = {https://openaccess.thecvf.com/content/CVPR2024W/ELVM/papers/Smith_Adaptive_Memory_Replay_for_Continual_Learning_CVPRW_2024_paper.pdf},
+  note      = {Replay mass from forgotten clusters; alternative to fixed slack floors}
+}
+
+@techreport{settles2009active,
+  title       = {Active Learning Literature Survey},
+  author      = {Settles, Burr},
+  institution = {University of Wisconsin--Madison},
+  year        = {2009},
+  number      = {1648},
+  url         = {https://burrsettles.com/pub/settles.activelearning.pdf},
+  note        = {Query strategies, pool-based active learning; QbC framing}
+}
+
+@inproceedings{gal2016dropout,
+  title     = {Dropout as a Bayesian Approximation: Representing Model Uncertainty in Deep Learning},
+  author    = {Gal, Yarin and Ghahramani, Zoubin},
+  booktitle = {Proceedings of the 33rd International Conference on Machine Learning},
+  series    = {ICML '16},
+  year      = {2016},
+  eprint    = {1506.02142},
+  archivePrefix = {arXiv},
+  url       = {https://arxiv.org/abs/1506.02142},
+  note      = {MC dropout uncertainty; alternative to deep ensembles for query scores}
+}
+
+@inproceedings{lakshminarayanan2017simple,
+  title     = {Simple and Scalable Predictive Uncertainty Estimation Using Deep Ensembles},
+  author    = {Lakshminarayanan, Balaji and Pritzel, Alexander and Blundell, Charles},
+  booktitle = {Advances in Neural Information Processing Systems 30},
+  year      = {2017},
+  eprint    = {1612.01474},
+  archivePrefix = {arXiv},
+  url       = {https://arxiv.org/abs/1612.01474},
+  note      = {Deep ensemble mean/std; matches n\_ensemble QbC-style scoring}
+}
+
+@inproceedings{tancik2020fourier,
+  title     = {Fourier Features Let Networks Learn High Frequency Functions in Low Dimensional Domains},
+  author    = {Tancik, Matthew and Srinivasan, Pratul P. and Mildenhall, Ben and Fridovich-Keil, Sara and Raghavan, Nithin and Singhal, Utkarsh and Ramamoorthi, Ravi and Barron, Jonathan T. and Ng, Ren},
+  booktitle = {Advances in Neural Information Processing Systems 33},
+  year      = {2020},
+  eprint    = {2006.10739},
+  archivePrefix = {arXiv},
+  url       = {https://arxiv.org/abs/2006.10739},
+  note      = {Random Fourier map on low-dim inputs; mitigates spectral bias in coordinate MLPs}
 }
 

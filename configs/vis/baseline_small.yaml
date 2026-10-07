@@ -1,0 +1,3 @@
+run_dir: runs/baseline_small_s0123/baseline_w512_d2_k4
+out_dir: figures/v1/s0123/baseline_w512_d2_k4
+stages: [0, 1, 2, 3]

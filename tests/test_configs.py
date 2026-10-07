@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from srcs.loader import (
   DEFAULT_CONFIG_STEM,
   list_configs,
@@ -127,3 +129,15 @@ def test_generate_data_accepts_sampler_cfg_flag() -> None:
     ["--data-root", "data/x", "--data-config", "small", "--overwrite-frozen"]
   )
   assert args.data_config == "small"
+
+
+def test_generate_data_accepts_data_yaml_path() -> None:
+  from srcs.simulation.generate_data import build_parser, pool_job_from_args
+
+  args = build_parser().parse_args(
+    ["configs/data/full.yaml", "--data-root", "data/v1", "--seed", "0"]
+  )
+  job = pool_job_from_args(args)
+  assert job.data_config == "full"
+  assert job.data_root == Path("data/v1")
+  assert job.train_stem is None

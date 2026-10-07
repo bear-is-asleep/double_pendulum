@@ -4,7 +4,8 @@ Run::
 
   python app_data.py
 
-Then open http://localhost:8766 (default). Set **data_root** in the app or pass ``data_root`` into ``create_app``.
+Open http://localhost:8766, enter **data_root**, then **Load pools**.
+Optional: ``create_app(Path("data/v1_small"))`` skips the picker when pools exist.
 
 See ``docs/visualization.md`` for pool file layout and NN overlay options.
 """
@@ -12,6 +13,7 @@ See ``docs/visualization.md`` for pool file layout and NN overlay options.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from nicegui import ui
 
@@ -22,18 +24,64 @@ from srcs.visualization.live_timeseries import LiveTimeseriesChart
 from srcs.visualization.viz import SHARED_HEAD_HTML, build_svg
 
 PORT = 8766
-DEFAULT_DATA_ROOT = Path("data")
 UI_HZ = 60
+_live_timers: list = []
 
 
-def create_app(data_root: Path = DEFAULT_DATA_ROOT) -> None:
-  root = Path(data_root)
+def _stop_live_timers() -> None:
+  for timer in _live_timers:
+    timer.deactivate()
+  _live_timers.clear()
+
+
+def parse_data_root(raw: str) -> Path | None:
+  """Validate user path; notify and return None on failure."""
+  text = (raw or "").strip()
+  if not text:
+    ui.notify("Enter a data_root path", type="warning")
+    return None
+  path = Path(text).expanduser()
+  if not path.is_dir():
+    ui.notify(f"Not a directory: {path}", type="negative")
+    return None
+  if not list_pools(path):
+    ui.notify(f"No stage*_<split>.npz pools under {path}", type="negative")
+    return None
+  return path.resolve()
+
+
+def mount_picker(host: ui.column, initial: str, on_load: Callable[[Path], None]) -> None:
+  """First screen: user supplies a pool directory."""
+  _stop_live_timers()
+  host.clear()
+  with host:
+    ui.label("Double pendulum dataset browser").classes("text-h6")
+    ui.label(
+      "Folder must contain stage{S}_{split}.npz files (e.g. data/v1_small)."
+    ).classes("meta")
+    data_root_input = ui.input(
+      label="data_root",
+      value=initial,
+      placeholder="data/v1_small",
+    ).classes("w-full")
+
+    def apply() -> None:
+      root = parse_data_root(data_root_input.value or "")
+      if root is not None:
+        on_load(root)
+
+    ui.button("Load pools", on_click=apply).props("outline")
+
+
+def mount_browser(host: ui.column, root: Path) -> None:
+  """Trajectory viewer and sidebar controls for one data_root."""
+  _stop_live_timers()
   pools = list_pools(root)
   if not pools:
-    ui.add_head_html(SHARED_HEAD_HTML)
-    with ui.column().classes("w-full q-pa-md").style("max-width: 640px; margin: 0 auto;"):
-      ui.input(label="data_root", value=str(root.resolve())).classes("w-full")
+    mount_picker(host, str(root), lambda r: mount_browser(host, r))
     return
+
+  host.clear()
 
   stage_ids = sorted({stage for stage, _, _ in pools})
   stage_options = {st: f"Stage {st}" for st in stage_ids}
@@ -58,8 +106,6 @@ def create_app(data_root: Path = DEFAULT_DATA_ROOT) -> None:
     "show_timeseries": True,
     "last_rendered_frame": -1,
   }
-
-  ui.add_head_html(SHARED_HEAD_HTML)
 
   def cache_key() -> tuple:
     return (state["stage"], state["split"], state["traj"])
@@ -138,20 +184,12 @@ def create_app(data_root: Path = DEFAULT_DATA_ROOT) -> None:
     render_frame()
 
   def apply_data_root() -> None:
-    raw = (data_root_input.value or "").strip()
-    if not raw:
-      ui.notify("Enter a data_root path", type="warning")
-      return
-    new_root = Path(raw).expanduser()
-    if not new_root.is_dir():
-      ui.notify(f"Not a directory: {new_root}", type="negative")
+    new_root = parse_data_root(data_root_input.value or "")
+    if new_root is None:
       return
     found = list_pools(new_root)
-    if not found:
-      ui.notify(f"No stage*_<split>.npz pools under {new_root}", type="negative")
-      return
     state["data_root"] = new_root
-    data_root_input.value = str(new_root.resolve())
+    data_root_input.value = str(new_root)
     stages = sorted({stage for stage, _, _ in found})
     opts = {st: f"Stage {st}" for st in stages}
     stage_sel.options = opts
@@ -162,79 +200,82 @@ def create_app(data_root: Path = DEFAULT_DATA_ROOT) -> None:
     ui.notify(f"Using data_root {new_root}")
     on_pool_change()
 
-  with ui.column().classes("w-full q-pa-md").style(
-    "max-width: 1100px; margin: 0 auto; gap: 1.25rem;"
-  ):
+  def change_data_root() -> None:
+    mount_picker(host, str(state["data_root"]), lambda r: mount_browser(host, r))
 
-    with ui.row().classes("w-full items-start").style(
-      "gap: 1.25rem; flex-wrap: wrap; align-items: flex-start;"
-    ):
-      with ui.column().style(
-        "flex: 1 1 520px; min-width: 280px; gap: 1rem; align-items: center;"
+  with host:
+    with ui.column().classes("w-full").style("gap: 1.25rem;"):
+      with ui.row().classes("w-full items-start").style(
+        "gap: 1.25rem; flex-wrap: wrap; align-items: flex-start;"
       ):
-        stage_el = ui.html("", sanitize=False).classes("stage")
-        ts_plot = ui.plotly({}).classes("w-full").style(
-          "max-width: 640px; min-height: 420px; border-radius: 16px; "
-          "border: 1px solid rgba(26, 42, 58, 0.08); "
-          "box-shadow: 0 12px 28px rgba(26, 42, 58, 0.1);"
-        )
-        ts_chart = LiveTimeseriesChart(ts_plot)
+        with ui.column().style(
+          "flex: 1 1 520px; min-width: 280px; gap: 1rem; align-items: center;"
+        ):
+          stage_el = ui.html("", sanitize=False).classes("stage")
+          ts_plot = ui.plotly({}).classes("w-full").style(
+            "max-width: 640px; min-height: 420px; border-radius: 16px; "
+            "border: 1px solid rgba(26, 42, 58, 0.08); "
+            "box-shadow: 0 12px 28px rgba(26, 42, 58, 0.1);"
+          )
+          ts_chart = LiveTimeseriesChart(ts_plot)
 
-      with ui.column().classes("panel").style(
-        "flex: 0 0 300px; width: min(300px, 100%); gap: 0.55rem;"
-      ):
-        status = ui.label("Running").classes("meta")
-        time_label = ui.label("t = 0.00 sec").classes("meta")
-        meta_label = ui.label("").classes("meta")
+        with ui.column().classes("panel").style(
+          "flex: 0 0 300px; width: min(300px, 100%); gap: 0.55rem;"
+        ):
+          status = ui.label("Running").classes("meta")
+          time_label = ui.label("t = 0.00 sec").classes("meta")
+          meta_label = ui.label("").classes("meta")
 
-        data_root_input = ui.input(
-          label="data_root",
-          value=str(root.resolve()),
-        ).classes("w-full")
-        ui.button("Apply data root", on_click=lambda: apply_data_root()).props("outline")
+          data_root_input = ui.input(
+            label="data_root",
+            value=str(root.resolve()),
+          ).classes("w-full")
+          with ui.row().style("gap: 0.5rem; flex-wrap: wrap;"):
+            ui.button("Apply data root", on_click=apply_data_root).props("outline")
+            ui.button("Change folder", on_click=change_data_root).props("flat")
 
-        stage_sel = ui.select(
-          stage_options,
-          value=state["stage"],
-          label="Curriculum stage",
-        )
-        split_sel = ui.select(
-          ["train", "val", "test"],
-          value=state["split"],
-          label="split",
-        )
-        traj_sel = ui.number(
-          label="Trajectory index",
-          value=0,
-          min=0,
-          step=1,
-          precision=0,
-        )
-        with ui.column().classes("slider-block"):
-          with ui.row().classes("slider-head"):
-            ui.label("Playback speed").classes("slider-caption")
-            speed_val = ui.label("1x").classes("meta slider-value")
-          speed_slider = ui.slider(min=1, max=10, value=1, step=1)
-        with ui.column().classes("slider-block"):
-          with ui.row().classes("slider-head"):
-            ui.label("Timeline").classes("slider-caption")
-            scrub_time_val = ui.label("t = 0.000 sec").classes("meta slider-value")
-          frame_scrub = ui.slider(min=0, max=1, value=0, step=1)
-        trail_toggle = ui.switch("Show trail", value=True)
-        timeseries_toggle = ui.switch("Show time series", value=True)
+          stage_sel = ui.select(
+            stage_options,
+            value=state["stage"],
+            label="Curriculum stage",
+          )
+          split_sel = ui.select(
+            ["train", "val", "test"],
+            value=state["split"],
+            label="split",
+          )
+          traj_sel = ui.number(
+            label="Trajectory index",
+            value=0,
+            min=0,
+            step=1,
+            precision=0,
+          )
+          with ui.column().classes("slider-block"):
+            with ui.row().classes("slider-head"):
+              ui.label("Playback speed").classes("slider-caption")
+              speed_val = ui.label("1x").classes("meta slider-value")
+            speed_slider = ui.slider(min=1, max=10, value=1, step=1)
+          with ui.column().classes("slider-block"):
+            with ui.row().classes("slider-head"):
+              ui.label("Timeline").classes("slider-caption")
+              scrub_time_val = ui.label("t = 0.000 sec").classes("meta slider-value")
+            frame_scrub = ui.slider(min=0, max=1, value=0, step=1)
+          trail_toggle = ui.switch("Show trail", value=True)
+          timeseries_toggle = ui.switch("Show time series", value=True)
 
-        compare_host = ui.column().classes("w-full")
-        comp_ui = attach_pool_comparison_panel(
-          compare_host,
-          ctx=ctx,
-          chart=ts_chart,
-          on_change=on_visual_change,
-        )
+          compare_host = ui.column().classes("w-full")
+          comp_ui = attach_pool_comparison_panel(
+            compare_host,
+            ctx=ctx,
+            chart=ts_chart,
+            on_change=on_visual_change,
+          )
 
-        with ui.row().style("gap: 0.5rem; flex-wrap: wrap;"):
-          play_btn = ui.button("Pause")
-          reset_btn = ui.button("Reset", color="secondary")
-          gif_btn = ui.button("Export gif", color="secondary")
+          with ui.row().style("gap: 0.5rem; flex-wrap: wrap;"):
+            play_btn = ui.button("Pause")
+            reset_btn = ui.button("Reset", color="secondary")
+            gif_btn = ui.button("Export gif", color="secondary")
 
   def on_scrub_change() -> None:
     if ctx.n_frames() == 0:
@@ -326,7 +367,19 @@ def create_app(data_root: Path = DEFAULT_DATA_ROOT) -> None:
           state["frame"] = (state["frame"] + step) % n
     render_frame()
 
-  ui.timer(1 / UI_HZ, tick)
+  _live_timers.append(ui.timer(1 / UI_HZ, tick))
+
+
+def create_app(data_root: Path | None = None) -> None:
+  ui.add_head_html(SHARED_HEAD_HTML)
+  host = ui.column().classes("w-full q-pa-md").style(
+    "max-width: 1100px; margin: 0 auto;"
+  )
+  if data_root is not None and list_pools(data_root):
+    mount_browser(host, Path(data_root).expanduser().resolve())
+  else:
+    initial = str(data_root) if data_root is not None else ""
+    mount_picker(host, initial, lambda root: mount_browser(host, root))
 
 
 def main() -> None:

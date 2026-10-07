@@ -1,22 +1,19 @@
 name: curriculum_ann
 strategy: curriculum
 
-# Per-stage val MSE pass bar; ends segment early except on the last stage in the job.
-stage_pass_mse:
-  - 0.2
-  - 0.2
-  - 0.2
-  - 0.2
-  - 0.2
-  - 0.2
-  - 0.2
+# Val-delta adaptive inlet (single loop; no segments).
+mix_inlet_gain: 1.4 # How quickly to add the new stage to the mix
+mix_inlet_max_chunk: 0.1 # Maximum chunk size to add to the mix
+mix_min_val_delta: 1.0e-3 # Minimum value delta to add to the mix
+mix_decay_lambda: 1.0 # 
+mix_unlock_fraction: 0.15 # 
 
-# Ramp (s-1) vs s remainder from weighted val: min MSE -> all s, max MSE -> all s-1.
-mix_val_mse_min: 0.05
-mix_val_mse_max: 0.3
-
-# Total train mass on stages 0..s-2 (split evenly) while introducing stage s.
 passed_stage_min_fraction: 0.05
 
-early_stop_patience: 5
-max_epochs_per_stage: 25
+# Flat wval: force inlet after patience epochs (chunk not capped by mix_inlet_max_chunk).
+mix_stagnation_wval_band: 1.0e-2
+mix_stagnation_patience: 3
+mix_stagnation_chunk: 0.07
+
+# Early stop (global early_stop_patience) counts only after mix matches terminal target.
+mix_inlet_terminal_frac_tol: 0.02

@@ -19,6 +19,7 @@ from srcs.loader import list_configs
 from srcs.train.base import prepare_run_dir, require_stage_pools
 from srcs.train.job import resolve_train_job
 from srcs.train.registry import list_train_model_names, trainer_for_model
+from srcs.utils.run_logging import attach_training_terminal_log
 from srcs.utils.yaml_io import print_mapping_yaml
 
 logger = logging.getLogger(__name__)
@@ -82,24 +83,25 @@ def main(argv: list[str] | None = None) -> int:
 
   device = args.device if args.device is not None else job.device
 
-  print_mapping_yaml(
-    "training parameters",
-    {
-      "train_config": args.config,
-      "model": job.model_name,
-      "data_root": job.data_root,
-      "runs_root": job.runs_root,
-      "run_id": job.run_id,
-      "stages": job.stages,
-      "device": device,
-      "max_epochs": job.max_epochs,
-      "train": job.cfg,
-    },
-  )
-
   try:
     require_stage_pools(job.data_root, job.stages)
     prepare_run_dir(job.runs_root, job.run_id, args.force)
+    run_dir = job.runs_root / job.run_id
+    attach_training_terminal_log(run_dir)
+    print_mapping_yaml(
+      "training parameters",
+      {
+        "train_config": args.config,
+        "model": job.model_name,
+        "data_root": job.data_root,
+        "runs_root": job.runs_root,
+        "run_id": job.run_id,
+        "stages": job.stages,
+        "device": device,
+        "max_epochs": job.max_epochs,
+        "train": job.cfg,
+      },
+    )
     res = trainer_for_model(job.model_name).train_trial(
       job.cfg,
       data_root=job.data_root,

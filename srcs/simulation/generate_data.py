@@ -20,7 +20,7 @@ from pathlib import Path
 
 from srcs.loader import (
   DEFAULT_CONFIG_STEM,
-  list_configs,
+  config_yaml_path,
   load_sampler_config,
   load_train_config,
   paired_data_config,
@@ -41,22 +41,47 @@ def _print_written_paths(paths: dict[int, dict[str, Path]]) -> None:
       print(f"stage {stage} {split}: {path}")
 
 
+def _pool_config_ref(ref: str) -> tuple[str, Path]:
+  """Train or data YAML (path or stem). Train stem wins when both exist."""
+  raw = Path(ref)
+  if raw.is_file():
+    kind = "train" if raw.parent.name == "train" else "data"
+    return kind, raw.resolve()
+  try:
+    return "train", config_yaml_path("train", ref)
+  except FileNotFoundError:
+    return "data", config_yaml_path("data", ref)
+
+
 def pool_job_from_args(args: Namespace) -> PoolGenerateJob:
   """Map CLI flags to a single pool-generation job."""
+  sampler_path: Path | None = None
   if args.config is not None:
-    train_job = load_train_config(args.config)
-    data_cfg = paired_data_config(args.config, args.data_config)
-    return PoolGenerateJob.from_train_job(
-      train_job,
-      data_root=args.data_root,
-      data_config=data_cfg,
-      train_stem=args.config,
-      seed=args.seed,
-      overwrite_frozen=args.overwrite_frozen,
-    )
+    kind, path = _pool_config_ref(args.config)
+    if kind == "train":
+      train_stem = path.stem
+      train_job = load_train_config(train_stem)
+      data_cfg = paired_data_config(train_stem, args.data_config)
+      return PoolGenerateJob.from_train_job(
+        train_job,
+        data_root=args.data_root,
+        data_config=data_cfg,
+        train_stem=train_stem,
+        seed=args.seed,
+        overwrite_frozen=args.overwrite_frozen,
+      )
+    sampler_path = path
+    data_cfg = path.stem
+  elif args.data_config is not None:
+    sampler_path = config_yaml_path("data", args.data_config)
+    data_cfg = sampler_path.stem
+  else:
+    data_cfg = DEFAULT_CONFIG_STEM
 
-  data_cfg = args.data_config or DEFAULT_CONFIG_STEM
-  sampler_cfg = load_sampler_config(data_config=data_cfg)
+  if sampler_path is not None:
+    sampler_cfg = load_sampler_config(path=sampler_path)
+  else:
+    sampler_cfg = load_sampler_config(data_config=data_cfg)
   root = args.data_root if args.data_root is not None else Path("data")
   return PoolGenerateJob(
     data_root=root,
@@ -72,25 +97,18 @@ def pool_job_from_args(args: Namespace) -> PoolGenerateJob:
 
 
 def build_parser() -> argparse.ArgumentParser:
-  train_names = list_configs("train")
-  data_names = list_configs("data")
   p = argparse.ArgumentParser(description="Generate double-pendulum data pools")
   p.add_argument(
     "config",
     nargs="?",
     default=None,
-    choices=train_names,
     metavar="CONFIG",
-    help=(
-      f"Train job stem ({', '.join(train_names)}); uses matching data stem "
-      f"when present"
-    ),
+    help="Train or data YAML path or stem",
   )
   p.add_argument(
     "--data-config",
-    choices=data_names,
     default=None,
-    help=f"Sampler YAML under configs/data/ (default: {DEFAULT_CONFIG_STEM})",
+    help=f"Sampler YAML path or stem (default: {DEFAULT_CONFIG_STEM})",
   )
   p.add_argument(
     "--data-root",
@@ -106,23 +124,23 @@ def build_parser() -> argparse.ArgumentParser:
   p.add_argument(
     "--stages",
     default=None,
-    help="Comma stages (default: all; ignored with CONFIG)",
+    help="Comma stages (default: all; ignored with train CONFIG)",
   )
   p.add_argument(
     "--train-counts",
     default=None,
-    help="Comma train sizes (ignored with CONFIG)",
+    help="Comma train sizes (ignored with train CONFIG)",
   )
   p.add_argument(
     "--test-counts",
     default=None,
-    help="Comma test sizes (ignored with CONFIG)",
+    help="Comma test sizes (ignored with train CONFIG)",
   )
   p.add_argument(
     "--val-fraction",
     type=float,
     default=None,
-    help="Override data YAML val_fraction (ignored with CONFIG)",
+    help="Override data YAML val_fraction (ignored with train CONFIG)",
   )
   p.add_argument("--seed", type=int, default=None, help="RNG seed override")
   p.add_argument(

@@ -19,6 +19,14 @@ def _activation(name: str) -> nn.Module:
   raise ValueError(f"unsupported activation {name!r}")
 
 
+def resolve_dropout_rate(cfg: dict[str, Any]) -> float:
+  """Fraction of hidden activations zeroed during ``model.train()`` (0 = disabled)."""
+  p = float(cfg.get("dropout", 0.0))
+  if p < 0.0 or p >= 1.0:
+    raise ValueError(f"dropout must be in [0, 1), got {p}")
+  return p
+
+
 def resolve_hidden_layer_widths(cfg: dict[str, Any]) -> list[int]:
   """
   One width per hidden block (length == effective depth).
@@ -50,17 +58,22 @@ def build_mlp(cfg: dict[str, Any]) -> nn.Module:
   Stack: Linear -> act per hidden layer, then Linear to ``output_dim``.
 
   ``cfg`` must include input_dim, output_dim, hidden_width, hidden_depth, activation.
+  Optional ``dropout`` in ``[0, 1)`` inserts ``Dropout`` after each hidden activation.
   Progressive training may pass a smaller ``effective_depth`` without mutating YAML.
   """
   in_dim = int(cfg["input_dim"])
   out_dim = int(cfg["output_dim"])
   widths = resolve_hidden_layer_widths(cfg)
   activation_name = str(cfg["activation"])
+  dropout_p = resolve_dropout_rate(cfg)
 
   layers: list[nn.Module] = []
   prev = in_dim
   for w in widths:
-    layers.extend([nn.Linear(prev, w), _activation(activation_name)])
+    layers.append(nn.Linear(prev, w))
+    layers.append(_activation(activation_name))
+    if dropout_p > 0.0:
+      layers.append(nn.Dropout(p=dropout_p))
     prev = w
   layers.append(nn.Linear(prev, out_dim))
   return nn.Sequential(*layers)

@@ -1,9 +1,9 @@
 # Heavier baseline pass: larger pools + longer train (mirror configs/data/full.yaml intent).
 
-data_root: data/v1_small
-runs_root: runs/curriculum_small
+data_root: data/v1
+runs_root: runs/curriculum_small_s0123
 run_id: curriculum_w512_d2_k4
-stages: [0, 1]
+stages: [0, 1, 2, 3]
 
 train:
   model: curriculum

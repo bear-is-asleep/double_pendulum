@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from nicegui import ui
 
+from srcs.visualization.comparison_data import LAYER_COLOR_NN, layer_swatch_html
 from srcs.visualization.layer_registry import PoolComparisonContext
 from srcs.visualization.live_timeseries import (
   DisplayMode,
@@ -15,6 +16,38 @@ from srcs.visualization.live_timeseries import (
   series_from_ground_truth,
 )
 from srcs.visualization.surrogate import STORED_LAYER_ID, SurrogateSource
+
+
+def _layer_leading(
+  kind: Literal["none", "spacer", "nn"],
+  color: str,
+) -> None:
+  """Keep switch labels aligned; NN rows get the purple dashed stroke chip."""
+  if kind == "none":
+    return
+  if kind == "spacer":
+    ui.element("div").classes("layer-swatch-spacer")
+    return
+  ui.html(
+    layer_swatch_html(color, dashed=True, title="NN overlay"),
+    sanitize=False,
+  )
+
+
+def _mount_layer_toggle(
+  label: str,
+  layer_id: str,
+  *,
+  leading: Literal["none", "spacer", "nn"],
+  nn_color: str,
+  initial: bool,
+  on_toggle: Callable[[str, bool], None],
+) -> ui.switch:
+  with ui.row().classes("items-center w-full layer-toggle-row").style("gap: 0.45rem;"):
+    _layer_leading(leading, nn_color)
+    sw = ui.switch(label, value=initial).classes("flex-grow")
+    sw.on_value_change(lambda e, lid=layer_id: on_toggle(lid, bool(e.value)))
+  return sw
 
 
 @dataclass
@@ -48,14 +81,28 @@ class PoolComparisonUI:
       return
     self.layer_column.clear()
     self._layer_switch_map.clear()
+    has_nn = bool(self.ctx.surrogates)
     with self.layer_column:
-      stored_sw = ui.switch("Stored (disk)", value=self.ctx.visible.get(STORED_LAYER_ID, True))
-      stored_sw.on_value_change(lambda e: self._on_layer(STORED_LAYER_ID, bool(e.value)))
+      stored_lead = "spacer" if has_nn else "none"
+      stored_sw = _mount_layer_toggle(
+        "Stored (disk)",
+        STORED_LAYER_ID,
+        leading=stored_lead,
+        nn_color=LAYER_COLOR_NN,
+        initial=self.ctx.visible.get(STORED_LAYER_ID, True),
+        on_toggle=self._on_layer,
+      )
       self._layer_switch_map[STORED_LAYER_ID] = stored_sw
       for sur in self.ctx.surrogates:
         lid = sur.layer_id()
-        sw = ui.switch(f"NN: {sur.label}", value=self.ctx.visible.get(lid, True))
-        sw.on_value_change(lambda e, layer=lid: self._on_layer(layer, bool(e.value)))
+        sw = _mount_layer_toggle(
+          f"NN: {sur.label}",
+          lid,
+          leading="nn",
+          nn_color=LAYER_COLOR_NN,
+          initial=self.ctx.visible.get(lid, True),
+          on_toggle=self._on_layer,
+        )
         self._layer_switch_map[lid] = sw
 
   def _on_layer(self, layer_id: str, on: bool) -> None:

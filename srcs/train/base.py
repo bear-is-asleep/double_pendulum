@@ -18,11 +18,14 @@ from torch.utils.data import DataLoader
 
 from srcs.loader import load_model_config
 from srcs.model.train_data import (
-  load_mixed_xy,
+  concat_xy,
+  fractions_from_stage_row_counts,
   load_stage_split_xy,
   make_loader,
+  subsampled_points_per_trajectory,
 )
-from srcs.simulation.data import pool_path
+from srcs.train.curriculum_mix import fraction_dict_for_log
+from srcs.simulation.data import open_pool, pool_path
 from srcs.train.epoch import (
   BestCheckpointTracker,
   LossWeights,
@@ -40,6 +43,7 @@ from srcs.train.run_dir import (
   utc_now_iso,
   write_summary,
 )
+from srcs.utils.run_logging import attach_training_terminal_log
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +156,7 @@ def persist_epoch_artifacts(
   stage_val: list[StageValLoss],
   metrics_extra: dict[str, Any] | None = None,
   epoch_seconds: float | None = None,
+  train_steps: int | None = None,
 ) -> None:
   """Write metrics.jsonl row, last.pt, and best.pt when val improves."""
   record: dict[str, Any] = {
@@ -160,7 +165,10 @@ def persist_epoch_artifacts(
     "mean_val_mse": mean_val,
     "stage_val_mse": stage_val_dict(stage_val),
     "global_step": global_step,
+    "batch_size": int(cfg["batch_size"]),
   }
+  if train_steps is not None:
+    record["train_steps"] = int(train_steps)
   if epoch_seconds is not None:
     record["epoch_seconds"] = float(epoch_seconds)
   if metrics_extra:
@@ -204,6 +212,7 @@ def finish_logged_epoch(
   mean_val: float,
   stage_val: list[StageValLoss],
   metrics_extra: dict[str, Any] | None = None,
+  train_steps: int | None = None,
 ) -> float:
   """One wall-clock sample: write metrics.jsonl once, then log it."""
   epoch_seconds = time.perf_counter() - epoch_t0
@@ -221,6 +230,7 @@ def finish_logged_epoch(
     stage_val=stage_val,
     metrics_extra=metrics_extra,
     epoch_seconds=epoch_seconds,
+    train_steps=train_steps,
   )
   log_fn(epoch_seconds)
   return epoch_seconds
@@ -366,6 +376,10 @@ class StrategyTrainer(ABC):
     data_root: Path | str,
   ) -> dict[str, Any]:
     mean_val = mean_finite_mse(stage_val)
+    pptr = subsampled_points_per_trajectory(
+      open_pool(data_root, int(stages[0]), "train"),
+      k,
+    )
     summary: dict[str, Any] = {
       "run_id": rid,
       "data_root": str(Path(data_root).resolve()),
@@ -381,6 +395,7 @@ class StrategyTrainer(ABC):
       "subsample_stride_k": k,
       "lr": float(cfg["lr"]),
       "batch_size": int(cfg["batch_size"]),
+      "points_per_trajectory": pptr,
       "stages": stages,
       "seed": int(cfg["seed"]),
     }
@@ -423,9 +438,14 @@ class MixedPoolTrainer(StrategyTrainer):
     device = pick_device(device_name)
     rid = run_id or baseline_run_id(cfg)
     run_dir = init_run_dir(runs_root, rid, cfg)
+    attach_training_terminal_log(run_dir)
     k = int(cfg["subsample_stride_k"])
     weights = loss_weights_from_cfg(cfg)
-    x_train, y_train = load_mixed_xy(data_root, stages, "train", k)
+    pairs = [load_stage_split_xy(data_root, s, "train", k) for s in stages]
+    row_counts = {stages[i]: int(pairs[i][0].shape[0]) for i in range(len(stages))}
+    # Log implicit shuffle mix (constant) so compare figures match curriculum metrics shape.
+    train_stage_fraction = fraction_dict_for_log(fractions_from_stage_row_counts(row_counts))
+    x_train, y_train = concat_xy(pairs)
     train_loader = make_loader(
       x_train,
       y_train,
@@ -483,6 +503,8 @@ class MixedPoolTrainer(StrategyTrainer):
           stage_val=metrics.stage_val,
           epoch_seconds=secs,
         ),
+        train_steps=metrics.steps,
+        metrics_extra={"train_stage_fraction": train_stage_fraction},
       )
 
       if tracker.should_stop(patience):

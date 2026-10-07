@@ -60,8 +60,9 @@ def curriculum_run_id(cfg: dict[str, Any], *, tag: str | None = None) -> str:
 
 def init_run_dir(runs_root: Path | str, run_id: str, cfg: dict[str, Any]) -> Path:
   root = Path(runs_root) / run_id
-  if root.exists():
+  if (root / "config.yaml").is_file():
     raise FileExistsError(f"run dir already exists: {root}")
+  root.mkdir(parents=True, exist_ok=True)
   (root / "checkpoints").mkdir(parents=True)
   with (root / "config.yaml").open("w", encoding="utf-8") as f:
     yaml.safe_dump(dict(cfg), f, sort_keys=False)

@@ -64,6 +64,15 @@ def pointwise_subsample(
   return _stack_pointwise(pool, t_idx)
 
 
+def subsampled_points_per_trajectory(pool: PoolData, stride_k: int) -> int:
+  """Time rows per trajectory after stride ``k`` (train-time subsample)."""
+  if stride_k < 1:
+    raise ValueError(f"stride_k must be >= 1, got {stride_k}")
+  if pool.n_traj == 0:
+    return 0
+  return int(np.arange(0, pool.n_t, stride_k, dtype=np.int64).shape[0])
+
+
 def concat_xy(
   pairs: list[tuple[NDArray[np.float64], NDArray[np.float64]]],
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
@@ -84,6 +93,27 @@ def load_stage_split_xy(
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
   pool = open_pool(data_root, stage, split)
   return pointwise_subsample(pool, stride_k)
+
+
+def fractions_from_stage_row_counts(counts: dict[int, int]) -> dict[int, float]:
+  """Normalize per-stage train row counts to sampling fractions."""
+  total = sum(counts.values())
+  if total <= 0:
+    raise ValueError("empty mixed train set across stages")
+  return {stage: n / total for stage, n in counts.items() if n > 0}
+
+
+def mixed_train_stage_fractions(
+  data_root: Path | str,
+  stages: list[int],
+  stride_k: int,
+) -> dict[int, float]:
+  """Row-count weights for uniform shuffle over concatenated stage train pools."""
+  counts: dict[int, int] = {}
+  for stage in stages:
+    x, _ = load_stage_split_xy(data_root, stage, "train", stride_k)
+    counts[stage] = int(x.shape[0])
+  return fractions_from_stage_row_counts(counts)
 
 
 def load_mixed_xy(

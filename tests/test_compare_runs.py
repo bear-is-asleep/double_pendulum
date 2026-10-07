@@ -13,6 +13,7 @@ from srcs.loader import load_vis_compare_config
 from srcs.visualization.compare_runs import (
   CompareModel,
   CompareSpec,
+  compare_spec_from_mapping,
   load_compare_config_by_name,
   render_compare_figures,
 )
@@ -37,6 +38,7 @@ def _write_run(
       "mean_val_mse": 0.4,
       "epoch_seconds": 2.0,
       "stage_val_mse": {"0": 0.3, "1": 0.35},
+      "train_stage_fraction": {"0": 1.0},
     },
     {
       "epoch": 2,
@@ -44,6 +46,7 @@ def _write_run(
       "mean_val_mse": 0.25,
       "epoch_seconds": 1.5,
       "stage_val_mse": {"0": 0.2, "1": 0.22},
+      "train_stage_fraction": {"0": 0.6, "1": 0.4},
     },
   ]
   metrics.write_text(
@@ -69,9 +72,28 @@ def _write_run(
 
 
 def test_vis_compare_config_loads() -> None:
-  cfg = load_vis_compare_config("baseline_vs_curriculum")
-  assert cfg["name"] == "baseline_vs_curriculum"
+  cfg = load_vis_compare_config("baseline_vs_curriculum_small")
+  assert cfg["name"] == "baseline_vs_curriculum_small"
+  assert cfg["stages"] == [0, 1, 2, 3]
   assert len(cfg["models"]) == 2
+
+
+def test_compare_spec_parses_stages(tmp_path: Path) -> None:
+  t = np.linspace(0.0, 1.0, 3)
+  row = np.linspace(0.05, 0.15, 3)
+  run_a = _write_run(tmp_path, "ra", t=t, error_row=row)
+  run_b = _write_run(tmp_path, "rb", t=t, error_row=row)
+  spec = compare_spec_from_mapping(
+    {
+      "name": "pair",
+      "stages": [0],
+      "models": [
+        {"label": "one", "run_dir": str(run_a)},
+        {"label": "two", "run_dir": str(run_b)},
+      ],
+    },
+  )
+  assert spec.allowed_stages == [0]
 
 
 def test_render_compare_figures_smoke(tmp_path: Path) -> None:
@@ -91,6 +113,7 @@ def test_render_compare_figures_smoke(tmp_path: Path) -> None:
     val_key="mean_val_mse",
     train_key="train_loss",
     train_ylim=0.4,
+    allowed_stages=None,
   )
   paths = render_compare_figures(spec)
   names = {p.name for p in paths}
@@ -98,6 +121,7 @@ def test_render_compare_figures_smoke(tmp_path: Path) -> None:
     "training.png",
     "cumulative_train_time.png",
     "stage_val_mse.png",
+    "train_stage_fraction.png",
     "error_vs_t.png",
     "channel_mae_vs_t.png",
     "summary_stages.png",
@@ -148,4 +172,4 @@ def test_load_compare_config_by_name(tmp_path: Path, monkeypatch: pytest.MonkeyP
   spec = load_compare_config_by_name("pair")
   assert spec.out_dir == tmp_path / "out"
   paths = render_compare_figures(spec)
-  assert len(paths) == 6
+  assert len(paths) == 7

@@ -9,15 +9,20 @@ import numpy as np
 import pytest
 
 from srcs.eval.channels import CHANNEL_KEYS, per_step_channel_abs_errors
+from srcs.visualization.eval_figures_config import EvalFiguresSpec
 from srcs.visualization.eval_figures import (
   cumulative_train_seconds_series,
+  load_eval_figures_config_by_name,
   metrics_has_curriculum_mix,
+  metrics_has_train_stage_fraction,
+  union_train_stage_ids,
   plot_cumulative_train_time,
   plot_curriculum_stage_mix,
   plot_error_vs_t,
   plot_summary_stages,
   plot_training_curves,
   render_eval_figures,
+  run_eval_figures_spec,
   stage_fraction_series,
 )
 from srcs.eval.pool_eval import EvalTestResult, weighted_loss_per_step, write_eval_artifacts
@@ -127,11 +132,20 @@ def test_stage_fraction_series_sums_to_one(tmp_path: Path) -> None:
     {"epoch": 2, "train_stage_fraction": {"0": 0.6, "1": 0.4}},
     {"epoch": 3, "train_stage_fraction": {"0": 0.2, "1": 0.8}},
   ]
+  assert metrics_has_train_stage_fraction(rows)
   assert metrics_has_curriculum_mix(rows)
   _, stages, mat = stage_fraction_series(rows)
   assert stages == [0, 1]
   for col in range(mat.shape[1]):
     assert np.isclose(mat[:, col].sum(), 1.0, rtol=1e-5)
+
+
+def test_union_train_stage_ids() -> None:
+  metrics = {
+    "a": [{"epoch": 1, "train_stage_fraction": {"0": 1.0}}],
+    "b": [{"epoch": 1, "train_stage_fraction": {"1": 0.5, "2": 0.5}}],
+  }
+  assert union_train_stage_ids(metrics) == [0, 1, 2]
 
 
 def test_plot_curriculum_stage_mix_smoke(tmp_path: Path) -> None:
@@ -216,6 +230,61 @@ def test_render_eval_figures_includes_cumulative_time(tmp_path: Path) -> None:
   assert any(p.name == "cumulative_train_time.png" for p in paths)
 
 
+def test_cumulative_trajectories_from_global_step(tmp_path: Path) -> None:
+  summary = tmp_path / "summary.json"
+  summary.write_text(
+    json.dumps(
+      {
+        "batch_size": 64,
+        "subsample_stride_k": 4,
+        "points_per_trajectory": 601,
+        "data_root": str(tmp_path / "data"),
+        "stages": [0],
+      }
+    ),
+    encoding="utf-8",
+  )
+  rows = [
+    {"epoch": 1, "global_step": 10, "epoch_seconds": 1.0, "batch_size": 64},
+    {"epoch": 2, "global_step": 25, "epoch_seconds": 1.0, "batch_size": 64},
+  ]
+  from srcs.visualization.training_volume import (
+    cumulative_trajectories_series,
+    training_volume_scale,
+  )
+
+  scale = training_volume_scale(rows, summary)
+  assert scale == (64, 601)
+  cum = cumulative_trajectories_series(rows, batch_size=64, points_per_trajectory=601)
+  # (10*64 + 15*64) / 601 trajectory-equivalent
+  expected = np.cumsum(np.array([10.0, 15.0]) * 64.0 / 601.0)
+  assert np.allclose(cum, expected)
+
+
+def test_plot_cumulative_train_time_twin_axis_smoke(tmp_path: Path) -> None:
+  run = tmp_path / "run"
+  run.mkdir()
+  summary = run / "summary.json"
+  summary.write_text(
+    '{"batch_size": 32, "points_per_trajectory": 100, "stages": [0]}',
+    encoding="utf-8",
+  )
+  metrics = run / "metrics.jsonl"
+  metrics.write_text(
+    "\n".join(
+      json.dumps(row)
+      for row in (
+        {"epoch": 1, "global_step": 5, "epoch_seconds": 2.0, "batch_size": 32, "train_steps": 5},
+        {"epoch": 2, "global_step": 10, "epoch_seconds": 2.0, "batch_size": 32, "train_steps": 5},
+      )
+    )
+    + "\n",
+    encoding="utf-8",
+  )
+  out = plot_cumulative_train_time(metrics, tmp_path / "time.png", summary_path=summary)
+  assert out.is_file() and out.stat().st_size > 400
+
+
 def test_render_eval_figures_curriculum_mix_on_training_png(tmp_path: Path) -> None:
   baseline = tmp_path / "baseline"
   baseline.mkdir()
@@ -236,6 +305,64 @@ def test_render_eval_figures_curriculum_mix_on_training_png(tmp_path: Path) -> N
   train = [p for p in curr_paths if p.name == "training.png"]
   assert len(train) == 1 and train[0].is_file()
   assert not any(p.name == "curriculum_stage_mix.png" for p in curr_paths)
+
+
+def test_load_eval_figures_config_by_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  vis_dir = tmp_path / "configs" / "vis"
+  vis_dir.mkdir(parents=True)
+  run = tmp_path / "run_a"
+  run.mkdir()
+  (run / "metrics.jsonl").write_text('{"epoch": 1, "train_loss": 1.0}\n', encoding="utf-8")
+  (vis_dir / "one_eval.yaml").write_text(
+    f"run_dir: {run}\n"
+    f"out_dir: {tmp_path / 'fig'}\n"
+    f"stages: [0, 1]\n",
+    encoding="utf-8",
+  )
+  monkeypatch.setattr("srcs.loader._CONFIG_ROOT", tmp_path / "configs")
+  monkeypatch.setitem(
+    __import__("srcs.loader", fromlist=["_KIND_DIRS"])._KIND_DIRS,
+    "vis",
+    vis_dir,
+  )
+  spec = load_eval_figures_config_by_name("one_eval")
+  assert spec.out_dir == tmp_path / "fig"
+  assert spec.allowed_stages == [0, 1]
+  paths = run_eval_figures_spec(spec)
+  assert any(p.name == "training.png" for p in paths)
+
+
+def test_run_eval_figures_spec_curriculum_inlet_theory(tmp_path: Path) -> None:
+  run = tmp_path / "curriculum_w512_d2_k4_s0123"
+  run.mkdir()
+  (run / "metrics.jsonl").write_text('{"epoch": 1, "train_loss": 1.0}\n', encoding="utf-8")
+  summary = {
+    "strategy": "curriculum",
+    "stages": [0, 1, 2, 3],
+    "passed_stage_min_fraction": 0.05,
+    "mix_inlet_gain": 1.4,
+    "mix_inlet_max_chunk": 0.1,
+    "mix_min_val_delta": 1e-5,
+    "mix_decay_lambda": 0.0,
+    "mix_unlock_fraction": 0.15,
+  }
+  (run / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+  layout = RunEvalLayout.from_metrics(run / "metrics.jsonl")
+  spec = EvalFiguresSpec(
+    layout=layout,
+    out_dir=tmp_path / "fig",
+    val_key=None,
+    train_key="train_loss",
+    allowed_stages=[0, 1, 2, 3],
+    error_npz=None,
+    channel_mae_npz=None,
+    summary_path=None,
+    eval_summary_path=None,
+  )
+  paths = run_eval_figures_spec(spec)
+  inlet = [p for p in paths if p.parent.name == "inlet_theory"]
+  assert len(inlet) == 3
+  assert all(p.is_file() and p.stat().st_size > 200 for p in inlet)
 
 
 def test_plot_summary_from_eval_summary(tmp_path: Path) -> None:

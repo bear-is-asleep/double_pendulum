@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import matplotlib
@@ -26,12 +26,23 @@ from srcs.utils.json_io import load_jsonl
 from srcs.utils.paths import ensure_dir, resolve_run_dir
 from srcs.utils.yaml_io import read_mapping
 from srcs.visualization.eval_figures import (
-  as_stage_rows,
-  cumulative_train_seconds_series,
   epoch_x,
+  metrics_has_train_stage_fraction,
+  stage_fraction_series,
+  stage_mse_map_from_layout,
+  union_train_stage_ids,
+)
+from srcs.visualization.training_volume import (
+  cumulative_train_seconds_series,
+  cumulative_trajectories_series,
+  training_volume_scale,
+)
+from srcs.visualization.eval_figures_config import parse_stages_yaml
+from srcs.visualization.eval_stage_npz import (
+  as_stage_rows,
+  filter_stage_id_list,
   parse_stage_id,
   stage_ids_from_npz,
-  stage_mse_map_from_layout,
 )
 from srcs.visualization.mpl_io import prepare_out, write_fig
 from srcs.visualization.mpl_plots import (
@@ -42,6 +53,7 @@ from srcs.visualization.mpl_plots import (
   decorate_time_axis,
   draw_epoch_lines,
   draw_grouped_stage_bars,
+  draw_train_stage_fraction_compare,
   make_rect_grid,
   palette_color,
   row_for_stage,
@@ -67,6 +79,7 @@ class CompareSpec:
   val_key: str | None
   train_key: str
   train_ylim: float
+  allowed_stages: list[int] | None
 
 
 def compare_spec_from_mapping(
@@ -93,6 +106,7 @@ def compare_spec_from_mapping(
     val_key=raw.get("val_key"),
     train_key=str(raw.get("train_key", "train_loss")),
     train_ylim=float(raw.get("train_ylim", _DEFAULT_TRAIN_YLIM)),
+    allowed_stages=parse_stages_yaml(raw.get("stages")),
   )
 
 
@@ -222,18 +236,81 @@ def plot_compare_cumulative_train_time(
   metrics: dict[str, list[dict]],
 ) -> Path:
   out = prepare_out(out_path)
-  fig, ax = plt.subplots(figsize=(8, 3))
+  fig, ax = plt.subplots(figsize=(8, 3.4))
   lines: list[tuple[list, list, str, str]] = []
+  traj_lines: list[tuple[list, list, str, str]] = []
   for i, model in enumerate(spec.models):
-    x, cum_s = cumulative_train_seconds_series(metrics[model.label])
+    rows = metrics[model.label]
+    x, cum_s = cumulative_train_seconds_series(rows)
+    color = palette_color(i)
     if x:
-      lines.append((x, cum_s, model.label, palette_color(i)))
+      lines.append((x, cum_s, model.label, color))
+    scale = training_volume_scale(rows, model.layout.summary)
+    if scale is not None and x:
+      batch_size, pptr = scale
+      cum_traj = cumulative_trajectories_series(
+        rows,
+        batch_size=batch_size,
+        points_per_trajectory=pptr,
+      )
+      traj_lines.append((x, cum_traj, f"{model.label} traj", color))
   draw_epoch_lines(ax, lines)
   ax.set_xlabel("epoch")
   ax.set_ylabel("cumulative time (s)")
-  ax.set_title("cumulative training time (compare)")
   ax.legend(loc="upper left", fontsize=8)
   ax.grid(True, alpha=0.3)
+  if traj_lines:
+    ax2 = ax.twinx()
+    for x, y, label, color in traj_lines:
+      ax2.plot(x, y, label=label, color=color, linewidth=1.4, linestyle="--")
+    ax2.set_ylabel("cumulative trajectories")
+  return write_fig(fig, out)
+
+
+def plot_compare_train_stage_fraction(
+  spec: CompareSpec,
+  out_path: Path | str,
+  *,
+  metrics: dict[str, list[dict]],
+) -> Path:
+  """Single axes: each line is one (model, stage) train mix vs epoch."""
+  out = prepare_out(out_path)
+  if not any(metrics_has_train_stage_fraction(rows) for rows in metrics.values()):
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.text(
+      0.5,
+      0.5,
+      "no train_stage_fraction in metrics",
+      ha="center",
+      va="center",
+      transform=ax.transAxes,
+    )
+    return write_fig(fig, out)
+
+  stage_filter = filter_stage_id_list(union_train_stage_ids(metrics), spec.allowed_stages)
+  allowed = frozenset(stage_filter) if stage_filter else None
+  fig, ax = plt.subplots(figsize=(10, 5))
+  for mi, model in enumerate(spec.models):
+    rows = metrics[model.label]
+    if not metrics_has_train_stage_fraction(rows):
+      continue
+    x, stage_ids, mat = stage_fraction_series(rows)
+    draw_train_stage_fraction_compare(
+      ax,
+      x,
+      stage_ids,
+      mat,
+      model_label=model.label,
+      color=palette_color(mi),
+      allowed_stages=allowed,
+    )
+  ax.set_ylim(0.0, 1.0)
+  ax.set_xlabel("epoch")
+  ax.set_ylabel("train stage fraction")
+  ax.set_title("train stage fraction (compare)")
+  ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=7)
+  ax.grid(True, alpha=0.3)
+  fig.subplots_adjust(right=0.78)
   return write_fig(fig, out)
 
 
@@ -244,7 +321,7 @@ def plot_compare_stage_val_mse(
   metrics: dict[str, list[dict]],
 ) -> Path:
   out = prepare_out(out_path)
-  stages = _stage_ids_from_metrics(metrics)
+  stages = filter_stage_id_list(_stage_ids_from_metrics(metrics), spec.allowed_stages)
   if not stages:
     fig, ax = plt.subplots(figsize=(6, 3))
     ax.text(0.5, 0.5, "no stage_val_mse in metrics", ha="center", va="center", transform=ax.transAxes)
@@ -275,7 +352,14 @@ def plot_compare_error_vs_t(spec: CompareSpec, out_path: Path | str) -> Path:
     [_load_staged_error(m) for m in spec.models],
     context="error_vs_t",
   )
-  stages = stage_ids_union([r.stage_ids for r in rows])
+  stages = filter_stage_id_list(
+    stage_ids_union([r.stage_ids for r in rows]),
+    spec.allowed_stages,
+  )
+  if not stages:
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.text(0.5, 0.5, "no stages match filter", ha="center", va="center", transform=ax.transAxes)
+    return write_fig(fig, out)
   grid = make_rect_grid(len(stages), ncols_max=3)
   ymax = ymax_for_stages(rows, stages)
   for idx, sid in enumerate(stages):
@@ -305,8 +389,15 @@ def plot_compare_channel_mae_vs_t(spec: CompareSpec, out_path: Path | str) -> Pa
     _load_staged_channel_mae(m) for m in spec.models
   ]
   align_staged_time_series([row for row, _ in loaded], context="channel_mae_vs_t")
-  stages = stage_ids_union([row.stage_ids for row, _ in loaded])
+  stages = filter_stage_id_list(
+    stage_ids_union([row.stage_ids for row, _ in loaded]),
+    spec.allowed_stages,
+  )
   n_stage = len(stages)
+  if n_stage == 0:
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.text(0.5, 0.5, "no stages match filter", ha="center", va="center", transform=ax.transAxes)
+    return write_fig(fig, out)
   fig, axes = plt.subplots(
     len(CHANNEL_MAE_PANELS),
     n_stage,
@@ -329,7 +420,7 @@ def plot_compare_channel_mae_vs_t(spec: CompareSpec, out_path: Path | str) -> Pa
             row.t,
             y,
             color=color,
-            label=f"{row.label} {key}" if prow == 0 and sidx == 0 else None,
+            label=f"{row.label} {key}" if sidx == 0 else None,
             fill_alpha=0.06,
             linestyle=ls,
           )
@@ -337,10 +428,9 @@ def plot_compare_channel_mae_vs_t(spec: CompareSpec, out_path: Path | str) -> Pa
         ax.set_title(f"stage {sid}")
       if sidx == 0:
         ax.set_ylabel(f"{prow_title}\nmean |error|")
+        ax.legend(fontsize=6, loc="upper left")
       ax.set_xlabel("t (s)")
       ax.grid(True, axis="y", alpha=0.3)
-      if prow == 0 and sidx == 0:
-        ax.legend(fontsize=6, loc="upper left")
   fig.suptitle("channel MAE vs time (compare)")
   return write_fig(fig, out)
 
@@ -353,7 +443,7 @@ def plot_compare_summary_stages(spec: CompareSpec, out_path: Path | str) -> Path
     mse = stage_mse_map_from_layout(model.layout)
     per_model.append((model.label, mse))
     stage_set.update(mse.keys())
-  stages = sorted(stage_set)
+  stages = filter_stage_id_list(sorted(stage_set), spec.allowed_stages)
   if not stages:
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.text(0.5, 0.5, "no stage metrics", ha="center", va="center", transform=ax.transAxes)
@@ -374,6 +464,11 @@ def render_compare_figures(spec: CompareSpec) -> list[Path]:
     lambda: plot_compare_training(spec, out / "training.png", val_key=val_key, metrics=metrics),
     lambda: plot_compare_cumulative_train_time(spec, out / "cumulative_train_time.png", metrics=metrics),
     lambda: plot_compare_stage_val_mse(spec, out / "stage_val_mse.png", metrics=metrics),
+    lambda: plot_compare_train_stage_fraction(
+      spec,
+      out / "train_stage_fraction.png",
+      metrics=metrics,
+    ),
     lambda: plot_compare_error_vs_t(spec, out / "error_vs_t.png"),
     lambda: plot_compare_channel_mae_vs_t(spec, out / "channel_mae_vs_t.png"),
     lambda: plot_compare_summary_stages(spec, out / "summary_stages.png"),
@@ -385,6 +480,13 @@ def main(argv: list[str] | None = None) -> None:
   parser = argparse.ArgumentParser(description="Overlay eval figures for multiple runs")
   parser.add_argument("--config", type=Path, default=None, help="configs/vis/<name>.yaml or any path")
   parser.add_argument("--name", default=None, help="stem under configs/vis/ (alternative to --config)")
+  parser.add_argument(
+    "--stages",
+    type=int,
+    nargs="+",
+    default=None,
+    help="subset of stages for stage_val_mse, eval_test, and summary plots",
+  )
   args = parser.parse_args(argv)
   if args.config is not None:
     spec = load_compare_config(args.config)
@@ -392,6 +494,8 @@ def main(argv: list[str] | None = None) -> None:
     spec = load_compare_config_by_name(args.name)
   else:
     parser.error("pass --config or --name")
+  if args.stages is not None:
+    spec = replace(spec, allowed_stages=list(args.stages))
   for p in render_compare_figures(spec):
     print(p)
 

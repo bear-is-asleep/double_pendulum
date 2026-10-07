@@ -11,6 +11,7 @@ Command-line entry points (run from repo root)::
 Run metric figures (``srcs.visualization.eval_figures``)::
 
   python -m srcs.visualization.plots eval --metrics runs/.../<run_id>/metrics.jsonl
+  python -m srcs.visualization.plots eval --name baseline_w512_d2_k4_s0123
 
 Gifs raster frames with matplotlib rather than parsing SVG, keeping dependencies
 limited to what is already in ``requirements.txt``.

@@ -23,6 +23,7 @@ from srcs.physics.core import (
   PendulumState,
   cartesian,
 )
+from srcs.visualization.comparison_data import LAYER_COLOR_NN, LAYER_COLOR_STORED
 
 # Default square viewport for the animation stage (matches CSS ``.stage`` width).
 CANVAS = 640
@@ -56,18 +57,26 @@ class PendulumFrame:
     return cls(params=sim.params, state=sim.state, trail=t)
 
 
+_PIVOT = "#000000"
+
+
 @dataclass(frozen=True)
 class LayerStyle:
   """Stroke and bob colors for dashed overlay arms."""
 
   dashed: bool = True
-  stroke: str = "#6b4c9a"
-  bob1: str = "#9b7bb8"
-  bob2: str = "#e07b4a"
+  stroke: str = LAYER_COLOR_NN
+  bob1: str = LAYER_COLOR_NN
+  bob2: str = LAYER_COLOR_NN
 
 
-# Solid primary arm. Dashed overlays keep the colors on LayerStyle.
-_SOLID_ARM = LayerStyle(dashed=False, stroke="#1a2a3a", bob1="#2f6f8f", bob2="#c45c26")
+# Solid primary arm (stored pool / live sim). Dashed overlays keep LayerStyle.
+_SOLID_ARM = LayerStyle(
+  dashed=False,
+  stroke=LAYER_COLOR_STORED,
+  bob1=LAYER_COLOR_STORED,
+  bob2=LAYER_COLOR_STORED,
+)
 
 
 def _paint(style: LayerStyle) -> LayerStyle:
@@ -129,7 +138,7 @@ def build_svg(
     # Physics +y up; SVG +y down.
     return cx + x * scale, cy - y * scale
 
-  def arm_svg(f: PendulumFrame, style: LayerStyle) -> str:
+  def arm_svg(f: PendulumFrame, style: LayerStyle, *, draw_pivot: bool) -> str:
     x1, y1, x2, y2 = cartesian(f.state, f.params)
     px, py = tx(0, 0)
     a1x, a1y = tx(x1, y1)
@@ -147,25 +156,28 @@ def build_svg(
         f'stroke="{bob2}" stroke-width="2" stroke-linecap="round" '
         f'stroke-linejoin="round" opacity="0.85"/>'
       )
+    pivot_dot = ""
+    if draw_pivot:
+      pivot_dot = f'<circle cx="{px}" cy="{py}" r="7" fill="{_PIVOT}"/>'
     return f"""
     {trail_poly}
     <line x1="{px}" y1="{py}" x2="{a1x}" y2="{a1y}"
           stroke="{stroke}" stroke-width="4" stroke-linecap="round"{dash}/>
     <line x1="{a1x}" y1="{a1y}" x2="{a2x}" y2="{a2y}"
           stroke="{stroke}" stroke-width="4" stroke-linecap="round"{dash}/>
-    <circle cx="{px}" cy="{py}" r="7" fill="{stroke}"/>
+    {pivot_dot}
     <circle cx="{a1x}" cy="{a1y}" r="{8 + 4 * f.params.m1}" fill="{bob1}"/>
     <circle cx="{a2x}" cy="{a2y}" r="{8 + 4 * f.params.m2}" fill="{bob2}"/>
     """
 
   body = ""
   if frame is not None:
-    body += arm_svg(frame, LayerStyle(dashed=False))
+    body += arm_svg(frame, LayerStyle(dashed=False), draw_pivot=True)
   else:
     px, py = tx(0, 0)
-    body += f'<circle cx="{px}" cy="{py}" r="7" fill="#1a2a3a"/>'
+    body += f'<circle cx="{px}" cy="{py}" r="7" fill="{_PIVOT}"/>'
   for f, style in extra:
-    body += arm_svg(f, style)
+    body += arm_svg(f, style, draw_pivot=False)
 
   return f"""
   <svg viewBox="0 0 {width} {height}" width="100%" height="100%"
@@ -264,6 +276,22 @@ SHARED_HEAD_HTML = """
     margin: 0;
     opacity: 1;
     font-weight: 600;
+  }
+  .layer-swatch {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    vertical-align: middle;
+  }
+  .layer-swatch-spacer {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+  .layer-toggle-row .q-switch {
+    flex: 1;
   }
 </style>
 """

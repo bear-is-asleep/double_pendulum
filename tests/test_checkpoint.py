@@ -18,8 +18,6 @@ from srcs.model.checkpoint import (
 from srcs.model.mlp import build_mlp
 from srcs.loader import load_model_config
 from srcs.train.run_dir import init_run_dir, save_checkpoint
-
-
 def test_build_pointwise_inputs_shape() -> None:
   t = np.linspace(0, 1, 5)
   row = np.array([0.1, 0.2, 0.3, 0.4, 1.0, 1.0, 1.0, 9.8])

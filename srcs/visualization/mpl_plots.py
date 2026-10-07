@@ -97,6 +97,32 @@ def draw_epoch_lines(
     ax.plot(x, y, label=label, color=color, linewidth=linewidth)
 
 
+def draw_train_stage_fraction_compare(
+  ax,
+  x: Sequence,
+  stage_ids: list[int],
+  mat: NDArray[np.float64],
+  *,
+  model_label: str,
+  color: str,
+  allowed_stages: frozenset[int] | None = None,
+  linewidth: float = 1.4,
+) -> None:
+  """Overlay one model's per-stage mix; linestyle = stage, color = model."""
+  for si, sid in enumerate(stage_ids):
+    if allowed_stages is not None and sid not in allowed_stages:
+      continue
+    ls = CHANNEL_LINESTYLES[si % len(CHANNEL_LINESTYLES)]
+    ax.plot(
+      x,
+      mat[si],
+      color=color,
+      linestyle=ls,
+      linewidth=linewidth,
+      label=f"{model_label} s{sid}",
+    )
+
+
 def draw_grouped_stage_bars(
   ax,
   stages: list[int],

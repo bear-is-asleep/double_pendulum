@@ -20,6 +20,7 @@ from srcs.simulation.data import (
   pool_path,
   save_pool,
 )
+from srcs.model.train_data import fractions_from_stage_row_counts
 from srcs.physics import wrap_angle
 
 
@@ -31,6 +32,13 @@ def _tiny_sampler_cfg() -> dict:
   cfg["max_draw_attempts"] = 200
   cfg["seed"] = 7
   return cfg
+
+
+def test_fractions_from_stage_row_counts() -> None:
+  fr = fractions_from_stage_row_counts({0: 30, 1: 70, 2: 0})
+  assert fr == {0: 0.3, 1: 0.7}
+  with pytest.raises(ValueError, match="empty mixed train"):
+    fractions_from_stage_row_counts({0: 0})
 
 
 def test_build_pool_shapes_and_wrap() -> None:

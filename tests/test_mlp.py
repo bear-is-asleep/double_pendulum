@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from srcs.model.mlp import build_mlp, resolve_hidden_layer_widths
+from torch import nn
+
+from srcs.loader import load_model_config
+from srcs.model.mlp import build_mlp, resolve_dropout_rate, resolve_hidden_layer_widths
 from srcs.train.run_dir import strategy_run_id
 
 
@@ -39,6 +42,21 @@ def test_list_width_per_layer() -> None:
 def test_effective_depth_truncates_list() -> None:
   cfg = _tiny_cfg(hidden_width=[32, 16, 8], hidden_depth=3, effective_depth=2)
   assert resolve_hidden_layer_widths(cfg) == [32, 16]
+
+
+def test_dropout_disabled_omits_modules() -> None:
+  cfg = _tiny_cfg(dropout=0.0)
+  assert resolve_dropout_rate(cfg) == 0.0
+  model = build_mlp(cfg)
+  assert not any(isinstance(m, nn.Dropout) for m in model.children())
+
+
+def test_dropout_inserts_after_hidden_activations() -> None:
+  cfg = _tiny_cfg(dropout=0.2)
+  model = build_mlp(cfg)
+  kinds = [type(m) for m in model.children()]
+  assert kinds == [nn.Linear, nn.Tanh, nn.Dropout, nn.Linear, nn.Tanh, nn.Dropout, nn.Linear]
+  assert resolve_dropout_rate(load_model_config("baseline")) == 0.1
 
 
 def test_strategy_run_id_list_width() -> None:

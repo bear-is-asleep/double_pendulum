@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 from plotly.subplots import make_subplots
 
 from srcs.visualization.comparison_data import (
+  CHART_FIELD_DASH,
   CHART_REF_COLORS,
   LayerSeries,
   ReferenceSeries,
@@ -120,13 +121,13 @@ def chart_traces(state: ComparisonChartState) -> list[ChartTrace]:
         layer_key="ref",
         y=_field_y(state, field, None),
         color=CHART_REF_COLORS[field],
-        dash="solid",
+        dash=CHART_FIELD_DASH[field],
         visible=True,
       ))
     for ly in state.layers:
       if values_mode:
         name = f"{label} ({ly.label})"
-        dash = "dash"
+        dash = CHART_FIELD_DASH[field]
       else:
         name = f"{label} delta ({ly.label})"
         dash = "solid"

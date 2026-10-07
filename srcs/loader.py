@@ -29,6 +29,19 @@ def list_configs(kind: str) -> list[str]:
   return sorted(p.stem for p in root.glob("*.yaml"))
 
 
+def config_yaml_path(kind: str, ref: str) -> Path:
+  """Resolve an on-disk path or ``configs/<kind>/<stem>.yaml``."""
+  raw = Path(ref)
+  if raw.is_file():
+    return raw.resolve()
+  stem = raw.stem if raw.suffix == ".yaml" else ref
+  path = _kind_dir(kind) / f"{stem}.yaml"
+  if not path.is_file():
+    known = ", ".join(list_configs(kind)) or "(none)"
+    raise FileNotFoundError(f"unknown {kind} config {ref!r}; known: {known}")
+  return path
+
+
 def load_config(kind: str, name: str) -> dict[str, Any]:
   """Load ``configs/<kind>/<name>.yaml``."""
   path = _kind_dir(kind) / f"{name}.yaml"
@@ -53,15 +66,33 @@ def paired_data_config(
   exists; else ``DEFAULT_CONFIG_STEM``.
   """
   if override is not None:
-    return override
+    return config_yaml_path("data", override).stem
   if train_stem is not None and train_stem in list_configs("data"):
     return train_stem
   return DEFAULT_CONFIG_STEM
 
 
+def load_vis_eval_config(name: str) -> dict[str, Any]:
+  """``configs/vis/<name>.yaml``: single-run eval figures (``metrics`` or ``run_dir``)."""
+  cfg = load_config("vis", name)
+  if "models" in cfg:
+    raise KeyError(
+      f"vis/{name}.yaml looks like a compare config (has 'models'); "
+      "use a separate stem for single-run eval figures",
+    )
+  if "metrics" not in cfg and "run_dir" not in cfg:
+    raise KeyError(f"vis/{name}.yaml must set 'metrics' or 'run_dir'")
+  return cfg
+
+
 def load_vis_compare_config(name: str) -> dict[str, Any]:
   """``configs/vis/<name>.yaml``: multi-run figure compare (``models`` list required)."""
   cfg = load_config("vis", name)
+  if "metrics" in cfg or "run_dir" in cfg:
+    raise KeyError(
+      f"vis/{name}.yaml looks like a single-run eval config; "
+      "use load_vis_eval_config or a separate stem for compare",
+    )
   models = cfg.get("models")
   if not isinstance(models, list) or len(models) < 2:
     raise KeyError(f"vis/{name}.yaml must list at least 2 entries under 'models'")
@@ -77,10 +108,15 @@ def load_vis_compare_config(name: str) -> dict[str, Any]:
 
 def load_train_config(name: str) -> dict[str, Any]:
   """``configs/train/<name>.yaml``: paths, stages, train overrides (pools live on disk)."""
-  cfg = load_config("train", name)
+  path = config_yaml_path("train", name)
+  cfg = read_mapping(path)
+  stem = path.stem
+  declared = cfg.get("name")
+  if declared is not None and declared != stem:
+    raise KeyError(f"{path}: 'name' must be {stem!r}, got {declared!r}")
   missing = _TRAIN_JOB_KEYS - cfg.keys()
   if missing:
-    raise KeyError(f"train/{name}.yaml missing keys: {sorted(missing)}")
+    raise KeyError(f"{path} missing keys: {sorted(missing)}")
   return cfg
 
 
@@ -133,13 +169,18 @@ def load_model_config(
   models_dir: Path | None = None,
 ) -> dict[str, Any]:
   """
-  Merge configs/models/base.yaml with configs/models/<model_name>.yaml.
+  Load model config: ``baseline`` is ``configs/models/base.yaml`` alone.
+
+  Other stems merge base with ``configs/models/<model_name>.yaml``.
   model_name: baseline | curriculum | active | progressive (no .yaml).
   """
   root = models_dir or _MODELS_DIR
   base = read_mapping(root / "base.yaml")
-  overlay = read_mapping(root / f"{model_name}.yaml")
-  merged = {**base, **overlay}
+  if model_name == "baseline":
+    merged = dict(base)
+  else:
+    overlay = read_mapping(root / f"{model_name}.yaml")
+    merged = {**base, **overlay}
   if "name" not in merged:
     raise KeyError(f"Model config {model_name} missing 'name' after merge")
   return merged

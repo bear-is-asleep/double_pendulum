@@ -1,4 +1,4 @@
-"""Curriculum: cumulative stage mix, val-scoped ramp, per-stage pass thresholds."""
+"""Curriculum: val-delta adaptive inlet across stages (single training loop)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from torch import nn, optim
+from torch import optim
 
 from srcs.model.train_data import (
   load_stage_split_xy,
@@ -24,16 +24,15 @@ from srcs.train.base import (
   finish_logged_epoch,
 )
 from srcs.train.curriculum_mix import (
-  CurriculumMixKnobs,
-  bump_staleness,
-  cumulative_val_stages,
+  InletReason,
+  active_val_stages,
+  decide_epoch_inlet,
   fraction_dict_for_log,
-  mix_knobs_from_cfg,
-  pair_fraction_from_val,
-  resolve_stage_pass_mse,
+  inlet_knobs_from_cfg,
+  inlet_mix_at_terminal,
   stage_mses_from_val_rows,
-  stage_train_fractions,
-  validate_curriculum_mix_cfg,
+  update_early_stop_staleness,
+  validate_curriculum_cfg,
   weighted_mean_stage_mse,
   weights_for_ramp_wval,
 )
@@ -47,25 +46,21 @@ from srcs.train.epoch import (
 )
 from srcs.train.mlp_trainer import MlpTrainerMixin
 from srcs.train.run_dir import curriculum_run_id, init_run_dir
+from srcs.utils.run_logging import attach_training_terminal_log
 
 logger = logging.getLogger(__name__)
 
 CurriculumTrialResult = MixedPoolTrialResult
 
 
-def epochs_per_stage_cap(cfg: dict[str, Any]) -> int:
-  return int(cfg.get("max_epochs_per_stage") or cfg["max_epochs"])
-
-
 def format_curriculum_stage_line(
-  target_stage: int,
+  active_max: int,
   stage_val: list[StageValLoss],
   train_fractions: dict[int, float],
 ) -> str:
-  """One line: stage N (mse = ..., f = ...) for stages 0..target_stage."""
   mses = {int(row.stage): float(row.mse) for row in stage_val}
   parts: list[str] = []
-  for s in range(0, target_stage + 1):
+  for s in range(0, active_max + 1):
     mse = mses.get(s, float("nan"))
     frac = float(train_fractions.get(s, 0.0))
     if math.isfinite(mse):
@@ -76,6 +71,35 @@ def format_curriculum_stage_line(
   return " | ".join(parts)
 
 
+def log_curriculum_inlet_injection(
+  *,
+  inlet_reason: InletReason,
+  inlet_chunk: float,
+  val_delta: float,
+  active_max_before: int,
+  active_max_after: int,
+  fractions_before: dict[int, float],
+  fractions_after: dict[int, float],
+  stagnation_flat_at_fire: int,
+) -> None:
+  """Emit only on stagnation-driven mix injection (val-drop inlets are on the epoch line)."""
+  if inlet_reason != "stagnation":
+    return
+  fr_before = fraction_dict_for_log(fractions_before)
+  fr_after = fraction_dict_for_log(fractions_after)
+  logger.info(
+    "curriculum stagnation inlet: flat_epochs=%s chunk=%.4f wval_delta=%.6f "
+    "active_max %s->%s mix %s -> %s",
+    stagnation_flat_at_fire,
+    inlet_chunk,
+    val_delta,
+    active_max_before,
+    active_max_after,
+    fr_before,
+    fr_after,
+  )
+
+
 def log_curriculum_epoch(
   *,
   epoch: int,
@@ -84,50 +108,26 @@ def log_curriculum_epoch(
   mean_val: float,
   best_val: float,
   epoch_seconds: float,
-  target_stage: int,
+  active_max: int,
+  val_delta: float,
+  inlet_chunk: float,
+  inlet_reason: InletReason,
+  stagnation_epochs: int,
+  stagnation_flat_at_fire: int,
+  inlet_terminal: bool,
   stage_val: list[StageValLoss],
   train_fractions: dict[int, float],
 ) -> None:
   epoch_line = (
-    f"segment {target_stage} epoch {epoch}/{epochs_cap} "
-    f"train={train_loss:.6f} val_mse={mean_val:.6f} best={best_val:.6f} ({epoch_seconds:.1f}s)"
+    f"epoch {epoch}/{epochs_cap} train={train_loss:.6f} "
+    f"wval={mean_val:.6f} best={best_val:.6f} "
+    f"delta={val_delta:.6f} chunk={inlet_chunk:.4f} reason={inlet_reason} "
+    f"stag={stagnation_epochs} terminal={inlet_terminal} active_max={active_max} "
+    f"({epoch_seconds:.1f}s)"
   )
-  logger.info("-"*len(epoch_line))
+  logger.info("-" * len(epoch_line))
   logger.info(epoch_line)
-  logger.info(format_curriculum_stage_line(target_stage, stage_val, train_fractions))
-
-
-
-def should_advance_curriculum_stage(
-  stale_epochs: int,
-  patience: int,
-  epoch_in_segment: int,
-  epochs_cap: int,
-  *,
-  stage_val: list[StageValLoss] | None = None,
-  target_stage: int | None = None,
-  pass_mse_for_target: float | None = None,
-  allow_pass_mse_advance: bool = True,
-) -> bool:
-  """
-  Advance segment on patience, ``max_epochs_per_stage``, or when target stage val
-  MSE clears ``stage_pass_mse`` (skipped on the final curriculum stage).
-  """
-  if stale_epochs >= patience:
-    return True
-  if epoch_in_segment >= epochs_cap:
-    return True
-  if (
-    allow_pass_mse_advance
-    and stage_val is not None
-    and target_stage is not None
-    and pass_mse_for_target is not None
-  ):
-    mses = stage_mses_from_val_rows(stage_val)
-    mse = mses.get(int(target_stage))
-    if mse is not None and math.isfinite(mse) and mse <= pass_mse_for_target:
-      return True
-  return False
+  logger.info(format_curriculum_stage_line(active_max, stage_val, train_fractions))
 
 
 @dataclass
@@ -136,175 +136,26 @@ class CurriculumProgress:
   global_step: int = 0
 
 
-@dataclass
-class _SegmentEpochOut:
-  wval: float
-  train_loss: float
-  steps: int
-  stage_val: list[StageValLoss]
-  fractions: dict[int, float]
-  pair_frac: float
-
-
-def _run_segment_epoch(
-  *,
-  target_stage: int,
-  pair_frac: float,
-  mix: CurriculumMixKnobs,
-  data_root: Path | str,
-  stage_train_xy: dict[int, tuple[Any, Any]],
-  cfg: dict[str, Any],
-  weights: LossWeights,
-  model: nn.Module,
-  device: Any,
-  optimizer: optim.Optimizer,
-  loader_seed: int,
-) -> _SegmentEpochOut:
-  """
-  Val on stages 0..target_stage, update pair_frac from weighted val, then train.
-  """
-  pre_mix = stage_train_fractions(target_stage, pair_frac, mix.prior_floor)
-  val_stages = cumulative_val_stages(target_stage)
-  stage_val = per_stage_val_losses(
-    model, data_root, val_stages, cfg, device, weights
-  )
-  mses = stage_mses_from_val_rows(stage_val)
-  wval_weights = weights_for_ramp_wval(target_stage, pre_mix)
-  wval = weighted_mean_stage_mse(mses, wval_weights)
-  new_pair = pair_fraction_from_val(wval, mix.vmin, mix.vmax)
-  train_fractions = stage_train_fractions(target_stage, new_pair, mix.prior_floor)
-
-  train_loader = make_weighted_stage_loader(
-    stage_train_xy,
-    train_fractions,
-    batch_size=int(cfg["batch_size"]),
-    seed=loader_seed,
-  )
-  steps = run_train_epoch(model, train_loader, device, optimizer, weights)
-  train_loss = eval_loader_mse(model, train_loader, device, weights)
-
-  return _SegmentEpochOut(
-    wval=wval,
-    train_loss=train_loss,
-    steps=steps,
-    stage_val=stage_val,
-    fractions=train_fractions,
-    pair_frac=new_pair,
-  )
-
-
-def train_curriculum_segment(
-  *,
-  target_stage: int,
-  data_root: Path | str,
-  stage_train_xy: dict[int, tuple[Any, Any]],
-  cfg: dict[str, Any],
-  mix: CurriculumMixKnobs,
-  weights: LossWeights,
-  model: nn.Module,
-  device: Any,
-  optimizer: optim.Optimizer,
-  run_dir: Path,
-  ckpt_dir: Path,
-  tracker: BestCheckpointTracker,
-  progress: CurriculumProgress,
-  patience: int,
-  pass_mse_for_target: float,
-  allow_pass_mse_advance: bool,
-) -> None:
-  """Train until segment advance rule fires for ``target_stage``."""
-  segment_stale = 0
-  best_wval = float("inf")
-  pair_frac = 0.0
-  seed_base = int(cfg["seed"]) + target_stage * 1000
-
-  logger.info("curriculum segment target_stage=%s", target_stage)
-
-  for epoch_in_segment in range(1, mix.epochs_per_segment + 1):
-    epoch_t0 = time.perf_counter()
-    out = _run_segment_epoch(
-      target_stage=target_stage,
-      pair_frac=pair_frac,
-      mix=mix,
-      data_root=data_root,
-      stage_train_xy=stage_train_xy,
-      cfg=cfg,
-      weights=weights,
-      model=model,
-      device=device,
-      optimizer=optimizer,
-      loader_seed=seed_base + progress.epochs_run,
-    )
-    pair_frac = out.pair_frac
-
-    progress.epochs_run += 1
-    progress.global_step += out.steps
-    best_wval, segment_stale = bump_staleness(out.wval, best_wval, segment_stale)
-    finish_logged_epoch(
-      epoch_t0=epoch_t0,
-      run_dir=run_dir,
-      ckpt_dir=ckpt_dir,
-      model=model,
-      optimizer=optimizer,
-      tracker=tracker,
-      cfg=cfg,
-      epoch=progress.epochs_run,
-      global_step=progress.global_step,
-      train_loss=out.train_loss,
-      mean_val=out.wval,
-      stage_val=out.stage_val,
-      metrics_extra={
-        "curriculum_target_stage": target_stage,
-        "segment_epoch": epoch_in_segment,
-        "mix_weighted_val_mse": out.wval,
-        "mix_pair_fraction": pair_frac,
-        "train_stage_fraction": fraction_dict_for_log(out.fractions),
-      },
-      log_fn=lambda secs: log_curriculum_epoch(
-        epoch=epoch_in_segment,
-        epochs_cap=mix.epochs_per_segment,
-        train_loss=out.train_loss,
-        mean_val=out.wval,
-        best_val=tracker.best_mean,
-        epoch_seconds=secs,
-        target_stage=target_stage,
-        stage_val=out.stage_val,
-        train_fractions=out.fractions,
-      ),
-    )
-
-    if should_advance_curriculum_stage(
-      segment_stale,
-      patience,
-      epoch_in_segment,
-      mix.epochs_per_segment,
-      stage_val=out.stage_val,
-      target_stage=target_stage,
-      pass_mse_for_target=pass_mse_for_target,
-      allow_pass_mse_advance=allow_pass_mse_advance,
-    ):
-      logger.info(
-        "curriculum advance target_stage=%s wval=%.6f stale=%s",
-        target_stage,
-        out.wval,
-        segment_stale,
-      )
-      return
-
-
 class CurriculumTrainer(MlpTrainerMixin, StrategyTrainer):
-  """Cumulative stages 0..s with val-driven mix and scoped validation."""
+  """Val-drop adaptive inlet; flat-band stagnation inlet (counters independent)."""
 
   def experiment_name(self) -> str:
     return "curriculum"
 
   def extra_summary_fields(self, cfg: dict[str, Any]) -> dict[str, Any]:
-    mix = mix_knobs_from_cfg(cfg, epochs_per_stage_cap(cfg))
+    knobs = inlet_knobs_from_cfg(cfg)
     return {
       "strategy": "curriculum",
-      "mix_val_mse_min": mix.vmin,
-      "mix_val_mse_max": mix.vmax,
-      "passed_stage_min_fraction": mix.prior_floor,
+      "passed_stage_min_fraction": knobs.prior_floor,
+      "mix_inlet_gain": knobs.gain,
+      "mix_inlet_max_chunk": knobs.max_chunk,
+      "mix_min_val_delta": knobs.min_delta,
+      "mix_decay_lambda": knobs.decay_lambda,
+      "mix_unlock_fraction": knobs.unlock_fraction,
+      "mix_stagnation_wval_band": knobs.stagnation_band,
+      "mix_stagnation_patience": knobs.stagnation_patience,
+      "mix_stagnation_chunk": knobs.stagnation_chunk,
+      "mix_inlet_terminal_frac_tol": knobs.terminal_frac_tol,
     }
 
   def train_trial(
@@ -321,25 +172,23 @@ class CurriculumTrainer(MlpTrainerMixin, StrategyTrainer):
     if not stages:
       raise ValueError("curriculum requires at least one stage id")
 
-    validate_curriculum_mix_cfg(cfg)
+    validate_curriculum_cfg(cfg)
     ordered = sorted(stages)
-    pass_by_stage = resolve_stage_pass_mse(cfg, ordered)
+    last_stage = int(max(ordered))
     device = pick_device(device_name)
     rid = run_id or curriculum_run_id(cfg)
     run_dir = init_run_dir(runs_root, rid, cfg)
+    attach_training_terminal_log(run_dir)
     k = int(cfg["subsample_stride_k"])
     weights = loss_weights_from_cfg(cfg)
     patience = int(cfg["early_stop_patience"])
-    epochs_per_segment = int(
-      max_epochs if max_epochs is not None else epochs_per_stage_cap(cfg)
-    )
-    mix = mix_knobs_from_cfg(cfg, epochs_per_segment)
+    epochs_cap = int(max_epochs if max_epochs is not None else cfg["max_epochs"])
+    knobs = inlet_knobs_from_cfg(cfg)
+    pass_mse = float(cfg["stage_pass_mse"])
 
     stage_train_xy: dict[int, tuple[Any, Any]] = {}
-
-    def ensure_train_stage(s: int) -> None:
-      if s not in stage_train_xy:
-        stage_train_xy[s] = load_stage_split_xy(data_root, s, "train", k)
+    for s in ordered:
+      stage_train_xy[s] = load_stage_split_xy(data_root, s, "train", k)
 
     model = self.build_model(cfg).to(device)
     n_params = self.count_parameters(model)
@@ -347,29 +196,139 @@ class CurriculumTrainer(MlpTrainerMixin, StrategyTrainer):
     tracker = BestCheckpointTracker()
     ckpt_dir = run_dir / "checkpoints"
     progress = CurriculumProgress()
-    last_stage = int(max(ordered))
 
-    for target_stage in ordered:
-      for s in range(0, target_stage + 1):
-        ensure_train_stage(s)
+    train_fractions: dict[int, float] = {ordered[0]: 1.0}
+    active_max = 0
+    prev_wval: float | None = None
+    stale_epochs = 0
+    stagnation_epochs = 0
+    best_wval = float("inf")
+    was_inlet_terminal = False
+    seed_base = int(cfg["seed"])
 
-      train_curriculum_segment(
-        target_stage=target_stage,
-        data_root=data_root,
-        stage_train_xy=stage_train_xy,
-        cfg=cfg,
-        mix=mix,
-        weights=weights,
-        model=model,
-        device=device,
-        optimizer=optimizer,
+    logger.info(
+      "curriculum adaptive inlet stages=%s epochs=%s last_stage=%s",
+      ordered,
+      epochs_cap,
+      last_stage,
+    )
+
+    for epoch_in_run in range(1, epochs_cap + 1):
+      if stale_epochs >= patience:
+        logger.info("curriculum early stop stale_epochs=%s", stale_epochs)
+        break
+
+      epoch_t0 = time.perf_counter()
+      val_stages = active_val_stages(active_max)
+      stage_val = per_stage_val_losses(
+        model, data_root, val_stages, cfg, device, weights
+      )
+      mses = stage_mses_from_val_rows(stage_val)
+      wval_weights = weights_for_ramp_wval(active_max, train_fractions)
+      wval = weighted_mean_stage_mse(mses, wval_weights)
+
+      has_prev_wval = prev_wval is not None and _finite_wval_pair(prev_wval, wval)
+      val_delta = float(prev_wval - wval) if has_prev_wval else 0.0
+      active_max_before = active_max
+      fractions_before = dict(train_fractions)
+      inlet_epoch = decide_epoch_inlet(
+        train_fractions,
+        active_max,
+        last_stage,
+        val_delta,
+        knobs,
+        stagnation_epochs,
+        has_prev_wval=has_prev_wval,
+      )
+      stagnation_epochs = inlet_epoch.stagnation_epochs
+      inlet_reason = inlet_epoch.inlet_reason
+      stagnation_flat_at_fire = inlet_epoch.stagnation_flat_at_fire
+      inlet_out = inlet_epoch.result
+      train_fractions = inlet_out.fractions
+      active_max = inlet_out.active_max_stage
+      inlet_chunk = inlet_out.inlet_chunk
+      if inlet_chunk > 0.0:
+        log_curriculum_inlet_injection(
+          inlet_reason=inlet_reason,
+          inlet_chunk=inlet_chunk,
+          val_delta=val_delta,
+          active_max_before=active_max_before,
+          active_max_after=active_max,
+          fractions_before=fractions_before,
+          fractions_after=train_fractions,
+          stagnation_flat_at_fire=stagnation_flat_at_fire,
+        )
+
+      inlet_terminal = inlet_mix_at_terminal(
+        active_max,
+        last_stage,
+        train_fractions,
+        knobs,
+      )
+      if math.isfinite(wval):
+        prev_wval = float(wval)
+      best_wval, stale_epochs, was_inlet_terminal = update_early_stop_staleness(
+        wval,
+        inlet_terminal=inlet_terminal,
+        best_wval=best_wval,
+        stale_epochs=stale_epochs,
+        was_inlet_terminal=was_inlet_terminal,
+      )
+
+      train_loader = make_weighted_stage_loader(
+        stage_train_xy,
+        train_fractions,
+        batch_size=int(cfg["batch_size"]),
+        seed=seed_base + progress.epochs_run,
+      )
+      steps = run_train_epoch(model, train_loader, device, optimizer, weights)
+      train_loss = eval_loader_mse(model, train_loader, device, weights)
+
+      progress.epochs_run += 1
+      progress.global_step += steps
+
+      finish_logged_epoch(
+        epoch_t0=epoch_t0,
         run_dir=run_dir,
         ckpt_dir=ckpt_dir,
+        model=model,
+        optimizer=optimizer,
         tracker=tracker,
-        progress=progress,
-        patience=patience,
-        pass_mse_for_target=pass_by_stage[int(target_stage)],
-        allow_pass_mse_advance=int(target_stage) != last_stage,
+        cfg=cfg,
+        epoch=progress.epochs_run,
+        global_step=progress.global_step,
+        train_loss=train_loss,
+        mean_val=wval,
+        stage_val=stage_val,
+        metrics_extra={
+          "mix_weighted_val_mse": wval,
+          "mix_val_delta": val_delta,
+          "mix_inlet_chunk": inlet_chunk,
+          "mix_inlet_reason": inlet_reason,
+          "mix_stagnation_epochs": stagnation_epochs,
+          "mix_stagnation_flat_at_fire": stagnation_flat_at_fire,
+          "mix_inlet_terminal": inlet_terminal,
+          "active_max_stage": active_max,
+          "train_stage_fraction": fraction_dict_for_log(train_fractions),
+        },
+        log_fn=lambda secs: log_curriculum_epoch(
+          epoch=epoch_in_run,
+          epochs_cap=epochs_cap,
+          train_loss=train_loss,
+          mean_val=wval,
+          best_val=tracker.best_mean,
+          epoch_seconds=secs,
+          active_max=active_max,
+          val_delta=val_delta,
+          inlet_chunk=inlet_chunk,
+          inlet_reason=inlet_reason,
+          stagnation_epochs=stagnation_epochs,
+          stagnation_flat_at_fire=stagnation_flat_at_fire,
+          inlet_terminal=inlet_terminal,
+          stage_val=stage_val,
+          train_fractions=train_fractions,
+        ),
+        train_steps=steps,
       )
 
     return complete_trial(
@@ -387,9 +346,13 @@ class CurriculumTrainer(MlpTrainerMixin, StrategyTrainer):
       epochs_run=progress.epochs_run,
       global_step=progress.global_step,
       k=k,
-      pass_mse=pass_by_stage,
+      pass_mse=pass_mse,
       summary_extra={
-        "curriculum_last_stage": int(max(ordered)),
-        "max_epochs_per_stage": epochs_per_segment,
+        "curriculum_last_stage": last_stage,
+        "final_active_max_stage": active_max,
       },
     )
+
+
+def _finite_wval_pair(prev: float, curr: float) -> bool:
+  return math.isfinite(prev) and math.isfinite(curr)

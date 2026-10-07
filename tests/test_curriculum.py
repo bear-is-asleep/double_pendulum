@@ -1,4 +1,4 @@
-"""Step 7: curriculum strategy (cumulative mix, scoped val)."""
+"""Curriculum strategy: adaptive inlet smoke."""
 
 from __future__ import annotations
 
@@ -8,18 +8,29 @@ import math
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from srcs.loader import load_model_config, load_sampler_config, sampler_val_fraction
 from srcs.simulation.data import build_pool, carve_validation, pool_path, save_pool
 from srcs.train.base import clears_pass_bar
-from srcs.train.curriculum import (
-  CurriculumTrainer,
-  epochs_per_stage_cap,
-  format_curriculum_stage_line,
-  should_advance_curriculum_stage,
-)
-from srcs.train.base import StageValLoss
-from srcs.train.curriculum_mix import resolve_stage_pass_mse
+from srcs.train.curriculum import CurriculumTrainer
+from srcs.utils.run_logging import close_run_log
+
+
+@pytest.fixture(autouse=True)
+def _no_terminal_tee(monkeypatch: pytest.MonkeyPatch) -> None:
+  def _noop_attach(run_dir: Path | str) -> Path:
+    log_path = Path(run_dir).resolve() / "train.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.touch()
+    return log_path
+
+  monkeypatch.setattr(
+    "srcs.train.curriculum.attach_training_terminal_log",
+    _noop_attach,
+  )
+  yield
+  close_run_log()
 
 
 def _tiny_sampler_cfg() -> dict:
@@ -54,48 +65,6 @@ def _write_tiny_stage_pools(
     save_pool(pool_path(data_root, stage, "val"), val, overwrite_frozen=True)
 
 
-def test_epochs_per_stage_cap_prefers_max_epochs_per_stage() -> None:
-  cfg = {"max_epochs": 100, "max_epochs_per_stage": 50}
-  assert epochs_per_stage_cap(cfg) == 50
-  assert epochs_per_stage_cap({"max_epochs": 100}) == 100
-
-
-def test_should_advance_curriculum_stage() -> None:
-  assert not should_advance_curriculum_stage(0, 5, 1, 10)
-  assert should_advance_curriculum_stage(5, 5, 3, 10)
-  assert should_advance_curriculum_stage(0, 5, 10, 10)
-  assert not should_advance_curriculum_stage(2, 5, 3, 10)
-  val = [StageValLoss(stage=0, mse=0.18)]
-  assert should_advance_curriculum_stage(
-    0,
-    5,
-    3,
-    10,
-    stage_val=val,
-    target_stage=0,
-    pass_mse_for_target=0.2,
-  )
-  assert not should_advance_curriculum_stage(
-    0,
-    5,
-    3,
-    10,
-    stage_val=val,
-    target_stage=0,
-    pass_mse_for_target=0.15,
-  )
-  assert not should_advance_curriculum_stage(
-    0,
-    5,
-    1,
-    100,
-    stage_val=val,
-    target_stage=1,
-    pass_mse_for_target=0.2,
-    allow_pass_mse_advance=False,
-  )
-
-
 def test_curriculum_trial_writes_run_dir(tmp_path: Path) -> None:
   cfg = load_model_config("curriculum")
   sampler = _tiny_sampler_cfg()
@@ -111,7 +80,7 @@ def test_curriculum_trial_writes_run_dir(tmp_path: Path) -> None:
   trial["hidden_width"] = 24
   trial["hidden_depth"] = 1
   trial["subsample_stride_k"] = 2
-  trial["max_epochs_per_stage"] = 2
+  trial["max_epochs"] = 4
   trial["early_stop_patience"] = 10
   trial["batch_size"] = 32
   trial["stage_pass_mse"] = 1e9
@@ -128,22 +97,22 @@ def test_curriculum_trial_writes_run_dir(tmp_path: Path) -> None:
   assert res.run_dir.is_dir()
   assert (res.run_dir / "metrics.jsonl").exists()
   summary = json.loads((res.run_dir / "summary.json").read_text(encoding="utf-8"))
-  assert summary.get("max_epochs_per_stage") == 2
   assert summary["experiment"] == "curriculum"
-  assert summary["curriculum_last_stage"] == 1
   assert summary["strategy"] == "curriculum"
+  assert "mix_inlet_gain" in summary
   assert all(np.isfinite(row.mse) for row in res.stage_val)
-  thresholds = resolve_stage_pass_mse(trial, [0, 1])
-  assert clears_pass_bar(list(res.stage_val), thresholds)
+  assert clears_pass_bar(list(res.stage_val), {0: 1e9, 1: 1e9})
 
   lines = (res.run_dir / "metrics.jsonl").read_text(encoding="utf-8").strip().split("\n")
   records = [json.loads(line) for line in lines if line]
-  targets_seen = {r["curriculum_target_stage"] for r in records}
-  assert targets_seen == {0, 1}
+  assert len(records) >= 1
   for row in records:
     fr = row["train_stage_fraction"]
     assert math.isclose(sum(float(v) for v in fr.values()), 1.0, rel_tol=1e-5)
     assert "mix_weighted_val_mse" in row
-    target = int(row["curriculum_target_stage"])
-    val_stages = {int(k) for k in row["stage_val_mse"]}
-    assert val_stages <= set(range(0, target + 1))
+    assert "active_max_stage" in row
+    assert "mix_val_delta" in row
+    assert "mix_inlet_reason" in row
+    assert "mix_stagnation_epochs" in row
+    assert "mix_inlet_terminal" in row
+    assert "mix_stagnation_flat_at_fire" in row

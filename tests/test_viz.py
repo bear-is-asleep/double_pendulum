@@ -80,6 +80,19 @@ def test_playback_series_shapes() -> None:
   assert state_on_pred_grid(pred, view, 0) == view.frame_at(0)
 
 
+def test_layer_swatch_and_palette() -> None:
+  from srcs.visualization.comparison_data import (
+    CHART_NN_COLOR,
+    LAYER_COLOR_NN,
+    LAYER_COLOR_STORED,
+    layer_swatch_html,
+  )
+
+  assert LAYER_COLOR_NN == CHART_NN_COLOR
+  assert 'stroke-dasharray="3 2"' in layer_swatch_html(LAYER_COLOR_NN, dashed=True, title="x")
+  assert LAYER_COLOR_STORED in layer_swatch_html(LAYER_COLOR_STORED, dashed=False, title="x")
+
+
 def test_chart_traces_values_and_residuals() -> None:
   from srcs.visualization.comparison_data import CHART_LAYER_COLOR_SETS, LayerSeries, ReferenceSeries
   from srcs.visualization.live_timeseries import ComparisonChartState, chart_traces

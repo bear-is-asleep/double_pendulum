@@ -1,6 +1,8 @@
 name: active_ann
 strategy: active
 
+dropout: 0.0
+
 # QbC ensemble std; mix with uniform (not pure high-var)
 n_ensemble: 2
 # Mix: (1-lambda)*uniform + lambda*uncertainty; lambda ramps with epoch

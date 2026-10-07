@@ -12,6 +12,7 @@ from srcs.model.checkpoint import load_model_from_checkpoint, predict_at_times
 from srcs.model.targets import decode_pred_row
 from srcs.physics.core import PendulumParams, PendulumState, cartesian, kinetic_energy, potential_energy
 from srcs.simulation.data import TrajectoryView
+from srcs.visualization.comparison_data import LAYER_COLOR_NN
 
 
 def state_on_pred_grid(
@@ -145,10 +146,9 @@ class SurrogateSource:
 
 STORED_LAYER_ID = "stored"
 
-# Dashed overlay palettes (index 0 unused; stored uses primary solid in build_svg).
-OVERLAY_PALETTES: list[dict[str, str]] = [
-  {"stroke": "#c2410c", "bob1": "#fb923c", "bob2": "#0891b2"},
-  {"stroke": "#15803d", "bob1": "#4ade80", "bob2": "#be185d"},
-  {"stroke": "#4338ca", "bob1": "#818cf8", "bob2": "#b45309"},
-  {"stroke": "#0f766e", "bob1": "#2dd4bf", "bob2": "#7e22ce"},
-]
+# One palette for every loaded checkpoint (dashed arms in build_svg).
+NN_OVERLAY_STYLE: dict[str, str] = {
+  "stroke": LAYER_COLOR_NN,
+  "bob1": LAYER_COLOR_NN,
+  "bob2": LAYER_COLOR_NN,
+}

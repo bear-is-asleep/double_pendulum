@@ -1,6 +1,7 @@
 name: baseline_vs_curriculum_small
+stages: [0, 1, 2, 3]
 models:
   - label: baseline
-    run_dir: runs/baseline_small/baseline_w512_d2_k4
+    run_dir: runs/baseline_small_s0123/baseline_w512_d2_k4
   - label: curriculum
-    run_dir: runs/curriculum_small/curriculum_w512_d2_k4
+    run_dir: runs/curriculum_small_s0123/curriculum_w512_d2_k4

@@ -51,51 +51,63 @@ class LayerSeries:
     return self.trace_colors[field]
 
 
-# Stored reference: theta1 cool, theta2 warm; energy purple / green.
+# Matches ``plots.plot_trajectory_timeseries`` (theta1 steel, theta2 accent, PE purple).
+_CHART_FIELDS = (
+  "sin_theta1",
+  "sin_theta2",
+  "omega1",
+  "omega2",
+  "potential",
+  "kinetic",
+)
+
 CHART_REF_COLORS: dict[str, str] = {
-  "sin_theta1": "#1d4ed8",
-  "sin_theta2": "#dc2626",
-  "omega1": "#2563eb",
-  "omega2": "#ea580c",
-  "potential": "#7c3aed",
-  "kinetic": "#059669",
+  "sin_theta1": "#2f6f8f",
+  "sin_theta2": "#c45c26",
+  "omega1": "#2f6f8f",
+  "omega2": "#c45c26",
+  "potential": "#6b4c9a",
+  "kinetic": "#2f6f8f",
 }
 
-# Per loaded checkpoint (high contrast pairs for theta1 vs theta2).
-CHART_LAYER_COLOR_SETS: list[dict[str, str]] = [
-  {
-    "sin_theta1": "#c2410c",
-    "sin_theta2": "#0891b2",
-    "omega1": "#c2410c",
-    "omega2": "#0891b2",
-    "potential": "#a855f7",
-    "kinetic": "#10b981",
-  },
-  {
-    "sin_theta1": "#15803d",
-    "sin_theta2": "#be185d",
-    "omega1": "#15803d",
-    "omega2": "#be185d",
-    "potential": "#6366f1",
-    "kinetic": "#ca8a04",
-  },
-  {
-    "sin_theta1": "#4338ca",
-    "sin_theta2": "#b45309",
-    "omega1": "#4338ca",
-    "omega2": "#b45309",
-    "potential": "#0d9488",
-    "kinetic": "#db2777",
-  },
-  {
-    "sin_theta1": "#0f766e",
-    "sin_theta2": "#7e22ce",
-    "omega1": "#0f766e",
-    "omega2": "#7e22ce",
-    "potential": "#b91c1c",
-    "kinetic": "#1d4ed8",
-  },
-]
+# First channel in each subplot row solid; second dashed (PE vs KE, etc.).
+CHART_FIELD_DASH: dict[str, str] = {
+  "sin_theta1": "solid",
+  "sin_theta2": "dash",
+  "omega1": "solid",
+  "omega2": "dash",
+  "potential": "solid",
+  "kinetic": "dash",
+}
+
+# Pendulum + chart: stored sim gray, all checkpoints share NN purple.
+LAYER_COLOR_STORED = "#6b757d"
+LAYER_COLOR_NN = "#6b4c9a"
+CHART_NN_COLOR = LAYER_COLOR_NN
+
+
+def nn_trace_colors() -> dict[str, str]:
+  return {name: CHART_NN_COLOR for name in _CHART_FIELDS}
+
+
+def layer_swatch_html(color: str, *, dashed: bool, title: str) -> str:
+  """Sidebar chip: solid fill (stored) or dashed stroke segment (NN overlay)."""
+  if dashed:
+    return (
+      f'<svg class="layer-swatch" width="14" height="14" viewBox="0 0 14 14" '
+      f'xmlns="http://www.w3.org/2000/svg" role="img" aria-label="{title}">'
+      f'<line x1="1" y1="7" x2="13" y2="7" stroke="{color}" stroke-width="3" '
+      f'stroke-linecap="round" stroke-dasharray="3 2"/></svg>'
+    )
+  border = "rgba(26, 42, 58, 0.22)"
+  return (
+    f'<span class="layer-swatch" title="{title}" '
+    f'style="background:{color}; border:1px solid {border};"></span>'
+  )
+
+
+# Back-compat alias for tests that import CHART_LAYER_COLOR_SETS[0].
+CHART_LAYER_COLOR_SETS: list[dict[str, str]] = [nn_trace_colors()]
 
 
 def pool_series_arrays(view: TrajectoryView) -> dict[str, NDArray[np.float64]]:

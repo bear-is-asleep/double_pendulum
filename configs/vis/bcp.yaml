@@ -1,0 +1,9 @@
+name: bcp
+stages: [0, 1, 2, 3, 4, 5, 6]
+models:
+  - label: baseline
+    run_dir: runs/v1/baseline_s06/baseline_w128_d3_k4
+  - label: curriculum
+    run_dir: runs/v1/curriculum_s06/curriculum_w128_d3_k4
+  - label: progressive
+    run_dir: runs/v1/progressive_s06/progressive_w128_d3_k4

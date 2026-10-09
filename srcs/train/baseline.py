@@ -18,14 +18,15 @@ class BaselineTrainer(MlpTrainerMixin, MixedPoolTrainer):
 def iter_search_grid(model_cfg: dict[str, Any]) -> Iterator[dict[str, Any]]:
   """Cartesian product of ``baseline_search`` lists in the baseline model YAML."""
   grid = model_cfg.get("baseline_search") or {}
-  widths = grid.get("hidden_widths") or [int(model_cfg["hidden_width"])]
+  raw_w = model_cfg["hidden_width"]
+  widths = grid.get("hidden_widths") or [raw_w]
   depths = grid.get("hidden_depths") or [int(model_cfg["hidden_depth"])]
   ks = grid.get("subsample_stride_k") or [int(model_cfg["subsample_stride_k"])]
   for w in widths:
     for d in depths:
       for k in ks:
         trial = dict(model_cfg)
-        trial["hidden_width"] = int(w)
+        trial["hidden_width"] = int(w) if isinstance(w, (int, float, str)) else w
         trial["hidden_depth"] = int(d)
         trial["subsample_stride_k"] = int(k)
         yield trial

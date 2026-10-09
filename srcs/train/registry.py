@@ -14,9 +14,11 @@ def _register() -> None:
     return
   from srcs.train.baseline import BaselineTrainer
   from srcs.train.curriculum import CurriculumTrainer
+  from srcs.train.progressive_pnn import ProgressivePnnTrainer
 
   _TRAINER_FACTORIES["baseline"] = BaselineTrainer
   _TRAINER_FACTORIES["curriculum"] = CurriculumTrainer
+  _TRAINER_FACTORIES["progressive"] = ProgressivePnnTrainer
 
 
 def list_train_model_names() -> list[str]:

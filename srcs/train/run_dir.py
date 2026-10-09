@@ -58,6 +58,10 @@ def curriculum_run_id(cfg: dict[str, Any], *, tag: str | None = None) -> str:
   return strategy_run_id(cfg, "curriculum", tag=tag)
 
 
+def progressive_run_id(cfg: dict[str, Any], *, tag: str | None = None) -> str:
+  return strategy_run_id(cfg, "progressive", tag=tag)
+
+
 def init_run_dir(runs_root: Path | str, run_id: str, cfg: dict[str, Any]) -> Path:
   root = Path(runs_root) / run_id
   if (root / "config.yaml").is_file():
@@ -82,6 +86,7 @@ def save_checkpoint(
   global_step: int,
   val_metric: float,
   cfg: dict[str, Any],
+  resume_state: dict[str, Any] | None = None,
 ) -> None:
   """Portable dict for rebuild-from-YAML + ``load_state_dict`` (see project.md)."""
   payload: dict[str, Any] = {
@@ -93,6 +98,8 @@ def save_checkpoint(
   }
   if optimizer is not None:
     payload["optimizer_state_dict"] = optimizer.state_dict()
+  if resume_state is not None:
+    payload["resume_state"] = dict(resume_state)
   torch.save(payload, path)
 
 

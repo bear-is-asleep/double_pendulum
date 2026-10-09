@@ -1,0 +1,8 @@
+data_root: data/v1_small
+runs_root: runs/progressive_small_s0123
+run_id: progressive_w512_d2_k4
+stages: [0, 1, 2, 3]
+
+train:
+  model: progressive
+  device: null

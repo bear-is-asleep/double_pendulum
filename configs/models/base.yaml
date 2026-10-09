@@ -10,8 +10,8 @@ input_dim: 8
 # Heads: sin/cos theta1, sin/cos theta2, omega1, omega2
 output_dim: 6
 # int = same width every hidden layer; list length must match hidden_depth
-hidden_width: [128, 64]
-hidden_depth: 2
+hidden_width: [128, 64, 32]
+hidden_depth: 3
 activation: tanh
 # Hidden activation dropout during train; 0 disables (no extra modules, old ckpts compatible)
 dropout: 0.2
@@ -21,12 +21,15 @@ lr: 0.001
 batch_size: 256
 subsample_stride_k: 4
 loss_weight_theta: 1.0
-loss_weight_omega: 0.25
-seed: 0
+loss_weight_omega: 1.0
+seed: 67
 max_epochs: 100
 
 stage_pass_mse: 1e-9
-early_stop_patience: 20
+early_stop_patience: 10
 
 # Active overrides n_ensemble in active.yaml
 n_ensemble: 1
+
+# Baseline only: proportional = mix by train row counts; equal = sample each stage equally.
+baseline_stage_mix: equal

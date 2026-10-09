@@ -18,6 +18,21 @@ from srcs.model import build_mlp, weighted_surrogate_loss
 from srcs.model.mlp import count_parameters
 from srcs.model.train_data import pointwise_subsample
 from srcs.utils.json_io import load_jsonl
+from srcs.utils.run_logging import close_run_log
+
+
+@pytest.fixture(autouse=True)
+def _disable_training_terminal_log(monkeypatch: pytest.MonkeyPatch):
+  def _noop_attach(run_dir: Path) -> Path:
+    return Path(run_dir) / "train.log"
+
+  monkeypatch.setattr(
+    "srcs.train.base.attach_training_terminal_log",
+    _noop_attach,
+  )
+  close_run_log()
+  yield
+  close_run_log()
 
 
 def _tiny_sampler_cfg() -> dict:
@@ -95,6 +110,7 @@ def test_baseline_trial_writes_run_dir(tmp_path: Path) -> None:
   mix_rows = load_jsonl(res.run_dir / "metrics.jsonl")
   mix = mix_rows[0]["train_stage_fraction"]
   assert abs(sum(float(v) for v in mix.values()) - 1.0) < 1e-5
+  assert "weighted_val_mse" in mix_rows[0]
   assert (res.run_dir / "summary.json").exists()
   assert (res.run_dir / "checkpoints" / "best.pt").exists()
   summary = json.loads((res.run_dir / "summary.json").read_text(encoding="utf-8"))
@@ -108,7 +124,8 @@ def test_baseline_trial_writes_run_dir(tmp_path: Path) -> None:
 def test_baseline_search_grid_yields_combos() -> None:
   cfg = load_model_config("baseline")
   combos = list(iter_search_grid(cfg))
-  assert len(combos) == 3 * 2 * 3  # widths x depths x k from base.yaml baseline_search
+  assert len(combos) == 1
+  assert combos[0]["hidden_width"] == cfg["hidden_width"]
 
 
 def _write_tiny_stage_pools(

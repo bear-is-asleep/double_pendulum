@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-from torch import nn, optim
+from numpy.typing import NDArray
+from torch import Tensor, nn, optim
 from torch.utils.data import DataLoader
 
 from srcs.model.loss import weighted_surrogate_loss
+
+StageTaggedPredictFn = Callable[[nn.Module, Tensor, Tensor], Tensor]
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,12 @@ def loss_weights_from_cfg(cfg: dict[str, Any]) -> LossWeights:
     theta=float(cfg["loss_weight_theta"]),
     omega=float(cfg["loss_weight_omega"]),
   )
+
+
+def adam_on_trainable(model: nn.Module, lr: float) -> optim.Adam:
+  """Fresh Adam over parameters that still require grad (PNN column unlock)."""
+  params = [p for p in model.parameters() if p.requires_grad]
+  return optim.Adam(params, lr=float(lr))
 
 
 def pick_device(preferred: str | None = None) -> torch.device:
@@ -64,6 +74,23 @@ def run_train_epoch(
   return steps
 
 
+def _accumulate_surrogate_mse(
+  pred: Tensor,
+  yb: Tensor,
+  weights: LossWeights,
+  total: float,
+  n: int,
+) -> tuple[float, int]:
+  loss = weighted_surrogate_loss(
+    pred,
+    yb,
+    loss_weight_theta=weights.theta,
+    loss_weight_omega=weights.omega,
+  )
+  batch_n = int(yb.shape[0])
+  return total + float(loss.item()) * batch_n, n + batch_n
+
+
 def eval_loader_mse(
   model: nn.Module,
   loader: DataLoader,
@@ -79,15 +106,87 @@ def eval_loader_mse(
       xb = xb.to(device)
       yb = yb.to(device)
       pred = model(xb)
-      loss = weighted_surrogate_loss(
-        pred,
-        yb,
-        loss_weight_theta=weights.theta,
-        loss_weight_omega=weights.omega,
+      total, n = _accumulate_surrogate_mse(pred, yb, weights, total, n)
+  if n == 0:
+    return float("nan")
+  return total / n
+
+
+def eval_numpy_xy_mse(
+  model: nn.Module,
+  x: NDArray[np.float64],
+  y: NDArray[np.float64],
+  device: torch.device,
+  weights: LossWeights,
+  batch_size: int,
+  predict_fn: Callable[[Tensor], Tensor],
+) -> float:
+  """Chunked val MSE when forward is not plain ``model(x)``."""
+  if x.shape[0] == 0:
+    return float("nan")
+  model.eval()
+  total = 0.0
+  n = 0
+  with torch.no_grad():
+    for start in range(0, x.shape[0], batch_size):
+      xb = torch.from_numpy(x[start : start + batch_size].astype(np.float32, copy=False)).to(
+        device
       )
-      batch_n = xb.shape[0]
-      total += float(loss.item()) * batch_n
-      n += batch_n
+      yb = torch.from_numpy(y[start : start + batch_size].astype(np.float32, copy=False)).to(
+        device
+      )
+      pred = predict_fn(xb)
+      total, n = _accumulate_surrogate_mse(pred, yb, weights, total, n)
+  return total / n if n else float("nan")
+
+
+def run_tagged_train_epoch(
+  model: nn.Module,
+  loader: DataLoader,
+  device: torch.device,
+  optimizer: optim.Optimizer,
+  weights: LossWeights,
+  predict_tagged: StageTaggedPredictFn,
+) -> int:
+  """Train epoch for loaders yielding ``(x, y, stage_id)``."""
+  model.train()
+  steps = 0
+  for xb, yb, stage_ids in loader:
+    xb = xb.to(device)
+    yb = yb.to(device)
+    stage_ids = stage_ids.to(device)
+    optimizer.zero_grad(set_to_none=True)
+    pred = predict_tagged(model, xb, stage_ids)
+    loss = weighted_surrogate_loss(
+      pred,
+      yb,
+      loss_weight_theta=weights.theta,
+      loss_weight_omega=weights.omega,
+    )
+    loss.backward()
+    optimizer.step()
+    steps += 1
+  return steps
+
+
+def eval_tagged_loader_mse(
+  model: nn.Module,
+  loader: DataLoader,
+  device: torch.device,
+  weights: LossWeights,
+  predict_tagged: StageTaggedPredictFn,
+) -> float:
+  """Mean surrogate MSE for stage-tagged loaders."""
+  model.eval()
+  total = 0.0
+  n = 0
+  with torch.no_grad():
+    for xb, yb, stage_ids in loader:
+      xb = xb.to(device)
+      yb = yb.to(device)
+      stage_ids = stage_ids.to(device)
+      pred = predict_tagged(model, xb, stage_ids)
+      total, n = _accumulate_surrogate_mse(pred, yb, weights, total, n)
   if n == 0:
     return float("nan")
   return total / n
@@ -139,6 +238,7 @@ def save_best_if_improved(
   global_step: int,
   cfg: dict[str, Any],
   save_fn,
+  resume_state: dict[str, Any] | None = None,
 ) -> bool:
   """
   Observe val metric and write ``best.pt`` when improved.
@@ -155,5 +255,6 @@ def save_best_if_improved(
       global_step=global_step,
       val_metric=mean_val,
       cfg=cfg,
+      resume_state=resume_state,
     )
   return improved

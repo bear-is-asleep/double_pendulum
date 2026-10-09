@@ -1,0 +1,10 @@
+# Heavier baseline pass: larger pools + longer train (mirror configs/data/full.yaml intent).
+
+data_root: data/v1
+runs_root: runs/v1/baseline_s06
+run_id: baseline_w128_d3_k4
+stages: [0, 1, 2, 3, 4, 5, 6]
+
+train:
+  model: baseline
+  device: null

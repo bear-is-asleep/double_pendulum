@@ -7,6 +7,7 @@ from pathlib import Path
 from srcs.loader import (
   DEFAULT_CONFIG_STEM,
   list_configs,
+  load_model_config,
   load_train_config,
   load_sampler_config,
   paired_data_config,
@@ -73,6 +74,15 @@ def test_data_configs_load() -> None:
   small = load_sampler_config(data_config="small")
   assert full["pools"]["train"] != small["pools"]["train"]
   assert small["pools"]["train"][0] < full["pools"]["train"][0]
+
+
+def test_progressive_model_inherits_curriculum_inlet() -> None:
+  curriculum = load_model_config("curriculum")
+  progressive = load_model_config("progressive")
+  assert progressive["strategy"] == "progressive"
+  assert progressive["model_type"] == "progressive_pnn"
+  assert progressive["mix_inlet_gain"] == curriculum["mix_inlet_gain"]
+  assert progressive["passed_stage_min_fraction"] == curriculum["passed_stage_min_fraction"]
 
 
 def test_train_job_configs_load() -> None:

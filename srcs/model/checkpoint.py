@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 from torch import nn
 
 from srcs.model.mlp import build_mlp
+from srcs.model.progressive_net import ProgressiveNet, build_progressive_net, pnn_stage_ready
 from srcs.utils.paths import (
   load_run_config,
   resolve_checkpoint_file,
@@ -66,7 +67,11 @@ def load_model_from_checkpoint(
   if not isinstance(ckpt, dict) or "model_state_dict" not in ckpt:
     raise KeyError(f"{ckpt_file}: expected dict with model_state_dict")
   cfg = load_run_config(run_dir, ckpt.get("config"))
-  model = build_mlp(cfg)
+  model_type = str(cfg.get("model_type", "mlp"))
+  if model_type == "progressive_pnn":
+    model = build_progressive_net(cfg)
+  else:
+    model = build_mlp(cfg)
   model.load_state_dict(ckpt["model_state_dict"])
   model.to(device)
   model.eval()
@@ -80,6 +85,13 @@ def load_model_from_checkpoint(
   return model, meta, ckpt_file
 
 
+def inference_column_index(cfg: dict[str, Any], stage: int) -> int | None:
+  """PNN eval uses column ``stage``; vanilla MLP uses default ``model(x)``."""
+  if str(cfg.get("model_type", "mlp")) != "progressive_pnn":
+    return None
+  return int(stage)
+
+
 @torch.no_grad()
 def predict_at_times(
   model: nn.Module,
@@ -88,6 +100,7 @@ def predict_at_times(
   *,
   device: str | torch.device = "cpu",
   batch_size: int = 4096,
+  column_index: int | None = None,
 ) -> NDArray[np.float64]:
   """Return shape ``(len(t), 6)`` surrogate targets."""
   x = build_pointwise_inputs(t, params_row)
@@ -96,7 +109,21 @@ def predict_at_times(
   out_parts: list[NDArray[np.float64]] = []
   for start in range(0, x.shape[0], batch_size):
     chunk = torch.from_numpy(x[start : start + batch_size].astype(np.float32, copy=False)).to(device)
-    pred = model(chunk).cpu().numpy()
+    if isinstance(model, ProgressiveNet):
+      if column_index is None:
+        raise TypeError(
+          "ProgressiveNet inference requires column_index (use stage id for test eval)"
+        )
+      if not pnn_stage_ready(model, int(column_index)):
+        raise IndexError(
+          f"checkpoint has n_columns={model.n_columns}, cannot infer column {column_index}"
+        )
+      pred = model.forward(chunk, column_index=int(column_index))
+    else:
+      if column_index is not None:
+        raise TypeError("column_index is only valid for ProgressiveNet checkpoints")
+      pred = model(chunk)
+    pred = pred.cpu().numpy()
     out_parts.append(pred.astype(np.float64, copy=False))
   return np.concatenate(out_parts, axis=0)
 

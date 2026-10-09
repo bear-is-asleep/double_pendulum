@@ -109,6 +109,17 @@
   note      = {Easy-to-hard training order; smooth difficulty ramps}
 }
 
+@misc{rusu2016progressive,
+  title        = {Progressive Neural Networks},
+  author       = {Rusu, Andrei A. and Rabinowitz, Neil C. and Desjardins, Guillaume and Soyer, Hubert and Kirkpatrick, James and Kavukcuoglu, Koray and Pascanu, Razvan and Hadsell, Raia},
+  year         = {2016},
+  eprint       = {1606.04671},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.LG},
+  url          = {https://arxiv.org/abs/1606.04671},
+  note         = {One frozen column per task; lateral adapters into new columns; no forgetting of prior tasks at cost of growing capacity}
+}
+
 @article{kirkpatrick2017overcoming,
   title   = {Overcoming Catastrophic Forgetting in Neural Networks},
   author  = {Kirkpatrick, James and Pascanu, Razvan and Hadsell, Raia and others},
@@ -204,5 +215,32 @@
   archivePrefix = {arXiv},
   url       = {https://arxiv.org/abs/2006.10739},
   note      = {Random Fourier map on low-dim inputs; mitigates spectral bias in coordinate MLPs}
+}
+
+@article{myers2020doublependulum,
+  title   = {Low-cost double pendulum for high-quality data collection with open-source video tracking and analysis},
+  author  = {Myers, Audun D. and Tempelman, Joshua R. and Petrushenko, David and Khasawneh, Firas A.},
+  journal = {HardwareX},
+  volume  = {8},
+  pages   = {e00138},
+  year    = {2020},
+  doi     = {10.1016/j.ohx.2020.e00138},
+  url     = {https://pmc.ncbi.nlm.nih.gov/articles/PMC9041261/},
+  note    = {Open benchtop double pendulum; 1000 FPS video tracking plus encoder validation; angle time series on Mendeley 10.17632/z4hvxjgtbz.2}
+}
+
+@article{kaheman2023multiarmpendulum,
+  title   = {The experimental multi-arm pendulum on a cart: A benchmark system for chaos, learning, and control},
+  author  = {Kaheman, Kadierdan and Fasel, Urban and Bramburger, Jason J. and Strom, Benjamin and Kutz, J. Nathan and Brunton, Steven L.},
+  journal = {HardwareX},
+  volume  = {15},
+  pages   = {e00465},
+  year    = {2023},
+  doi     = {10.1016/j.ohx.2023.e00465},
+  eprint  = {2205.06231},
+  archivePrefix = {arXiv},
+  primaryClass  = {nlin.CD},
+  url     = {https://pmc.ncbi.nlm.nih.gov/articles/PMC10458325/},
+  note    = {Encoder angle and velocity for single/double/triple pendulum with and without cart excitation; data Zenodo 10.5281/zenodo.6633719}
 }
 

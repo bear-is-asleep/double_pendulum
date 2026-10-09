@@ -13,8 +13,17 @@ def prepare_out(out_path: Path | str) -> Path:
   return ensure_parent_dir(out_path)
 
 
-def write_fig(fig: plt.Figure, out: Path, *, dpi: int = 120) -> Path:
-  fig.tight_layout()
+def write_fig(
+  fig: plt.Figure,
+  out: Path,
+  *,
+  dpi: int = 120,
+  tight_rect: tuple[float, float, float, float] | None = None,
+) -> Path:
+  if tight_rect is not None:
+    fig.tight_layout(rect=tight_rect)
+  else:
+    fig.tight_layout()
   fig.savefig(out, dpi=dpi)
   plt.close(fig)
   return out

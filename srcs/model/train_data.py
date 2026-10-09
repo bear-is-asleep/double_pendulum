@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from numpy.typing import NDArray
-from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
+from torch.utils.data import DataLoader, Sampler, TensorDataset
 
 from srcs.simulation.data import PoolData, open_pool
 from srcs.simulation.sampler import stage_id_bounds
@@ -103,6 +103,35 @@ def fractions_from_stage_row_counts(counts: dict[int, int]) -> dict[int, float]:
   return {stage: n / total for stage, n in counts.items() if n > 0}
 
 
+BASELINE_STAGE_MIX_PROPORTIONAL = "proportional"
+BASELINE_STAGE_MIX_EQUAL = "equal"
+
+
+def resolve_baseline_stage_mix(cfg: dict) -> str:
+  """Baseline mixed-pool train sampling: row counts (default) or equal per stage."""
+  mode = str(cfg.get("baseline_stage_mix", BASELINE_STAGE_MIX_PROPORTIONAL)).strip().lower()
+  if mode not in (BASELINE_STAGE_MIX_PROPORTIONAL, BASELINE_STAGE_MIX_EQUAL):
+    raise ValueError(
+      "baseline_stage_mix must be "
+      f"'{BASELINE_STAGE_MIX_PROPORTIONAL}' or '{BASELINE_STAGE_MIX_EQUAL}', got {mode!r}"
+    )
+  return mode
+
+
+def baseline_stage_mix_fractions(
+  stages: list[int],
+  row_counts: dict[int, int],
+  mode: str,
+) -> dict[int, float]:
+  """Stage weights for training sampler and weighted val MSE (must match train_loss)."""
+  if mode == BASELINE_STAGE_MIX_EQUAL:
+    if not stages:
+      raise ValueError("baseline equal stage mix requires at least one stage")
+    share = 1.0 / float(len(stages))
+    return {int(s): share for s in stages}
+  return fractions_from_stage_row_counts(row_counts)
+
+
 def mixed_train_stage_fractions(
   data_root: Path | str,
   stages: list[int],
@@ -131,6 +160,89 @@ def curriculum_stage_ids(sampler_cfg: dict) -> list[int]:
   return list(range(lo, hi + 1))
 
 
+class _StageMixSampler(Sampler[int]):
+  """Pick stage by ``fractions``, then a uniform row inside that stage's concat block."""
+
+  def __init__(
+    self,
+    spans: list[tuple[int, int]],
+    stage_probs: torch.Tensor,
+    num_samples: int,
+    generator: torch.Generator,
+  ) -> None:
+    self._spans = spans
+    self._stage_probs = stage_probs
+    self._num_samples = int(num_samples)
+    self._generator = generator
+
+  def __iter__(self):
+    for _ in range(self._num_samples):
+      si = int(torch.multinomial(self._stage_probs, 1, generator=self._generator).item())
+      lo, hi = self._spans[si]
+      yield int(torch.randint(lo, hi, (1,), generator=self._generator).item())
+
+  def __len__(self) -> int:
+    return self._num_samples
+
+
+def _make_stage_mix_loader(
+  stage_xy: dict[int, tuple[NDArray[np.float64], NDArray[np.float64]]],
+  fractions: dict[int, float],
+  *,
+  batch_size: int,
+  seed: int,
+  eps: float,
+  tag_stages: bool,
+) -> DataLoader:
+  active = sorted(
+    s for s, f in fractions.items() if f > eps and s in stage_xy
+  )
+  if not active:
+    raise ValueError("no active stages with training data")
+
+  xs: list[NDArray[np.float64]] = []
+  ys: list[NDArray[np.float64]] = []
+  stage_cols: list[NDArray[np.int64]] = []
+  spans: list[tuple[int, int]] = []
+  probs: list[float] = []
+  offset = 0
+  for stage in active:
+    x, y = stage_xy[stage]
+    n = int(x.shape[0])
+    if n == 0:
+      continue
+    xs.append(x)
+    ys.append(y)
+    if tag_stages:
+      stage_cols.append(np.full(n, int(stage), dtype=np.int64))
+    spans.append((offset, offset + n))
+    probs.append(float(fractions[stage]))
+    offset += n
+  if not xs:
+    raise ValueError("empty training set across active stages")
+
+  x_all = np.concatenate(xs, axis=0)
+  y_all = np.concatenate(ys, axis=0)
+  stage_probs = torch.as_tensor(probs, dtype=torch.double)
+  stage_probs = stage_probs / stage_probs.sum()
+
+  gen = torch.Generator()
+  gen.manual_seed(int(seed))
+  sampler = _StageMixSampler(spans, stage_probs, int(x_all.shape[0]), gen)
+
+  fields = [
+    torch.from_numpy(x_all.astype(np.float32, copy=False)),
+    torch.from_numpy(y_all.astype(np.float32, copy=False)),
+  ]
+  if tag_stages:
+    fields.append(torch.from_numpy(np.concatenate(stage_cols, axis=0)))
+  return DataLoader(
+    TensorDataset(*fields),
+    batch_size=int(batch_size),
+    sampler=sampler,
+  )
+
+
 def make_weighted_stage_loader(
   stage_xy: dict[int, tuple[NDArray[np.float64], NDArray[np.float64]]],
   fractions: dict[int, float],
@@ -139,45 +251,34 @@ def make_weighted_stage_loader(
   seed: int,
   eps: float = 1.0e-12,
 ) -> DataLoader:
-  """
-  Sample train rows with probability proportional to per-stage ``fractions``.
+  """Train loader: stage mix ``fractions``, uniform rows within each stage."""
+  return _make_stage_mix_loader(
+    stage_xy,
+    fractions,
+    batch_size=batch_size,
+    seed=seed,
+    eps=eps,
+    tag_stages=False,
+  )
 
-  Each row in stage ``s`` gets weight ``fractions[s] / n_rows_s``.
-  """
-  active = [s for s, f in fractions.items() if f > eps and s in stage_xy]
-  if not active:
-    raise ValueError("no active stages with training data")
-  xs: list[NDArray[np.float64]] = []
-  ys: list[NDArray[np.float64]] = []
-  weights: list[float] = []
-  for stage in sorted(active):
-    x, y = stage_xy[stage]
-    n = int(x.shape[0])
-    if n == 0:
-      continue
-    frac = float(fractions[stage])
-    row_w = frac / n
-    xs.append(x)
-    ys.append(y)
-    weights.extend([row_w] * n)
-  if not xs:
-    raise ValueError("empty training set across active stages")
-  x_all = np.concatenate(xs, axis=0)
-  y_all = np.concatenate(ys, axis=0)
-  w_t = torch.as_tensor(weights, dtype=torch.double)
-  gen = torch.Generator()
-  gen.manual_seed(int(seed))
-  sampler = WeightedRandomSampler(
-    w_t,
-    num_samples=int(x_all.shape[0]),
-    replacement=True,
-    generator=gen,
+
+def make_weighted_stage_loader_tagged(
+  stage_xy: dict[int, tuple[NDArray[np.float64], NDArray[np.float64]]],
+  fractions: dict[int, float],
+  *,
+  batch_size: int,
+  seed: int,
+  eps: float = 1.0e-12,
+) -> DataLoader:
+  """Same as ``make_weighted_stage_loader`` with a third tensor ``stage_id`` per row."""
+  return _make_stage_mix_loader(
+    stage_xy,
+    fractions,
+    batch_size=batch_size,
+    seed=seed,
+    eps=eps,
+    tag_stages=True,
   )
-  ds = TensorDataset(
-    torch.from_numpy(x_all.astype(np.float32, copy=False)),
-    torch.from_numpy(y_all.astype(np.float32, copy=False)),
-  )
-  return DataLoader(ds, batch_size=int(batch_size), sampler=sampler)
 
 
 def make_loader(

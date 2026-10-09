@@ -14,7 +14,8 @@ Writes
 placeholder PNGs so CI can smoke without a full run.
 
 Curriculum runs also write ``inlet_theory/*.png`` (adaptive mix knobs from
-``summary.json`` or ``config.yaml``).
+``summary.json`` or ``config.yaml``). Progressive PNN runs write
+``pnn_architecture_stages.png`` (column freeze / lateral schematic).
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from srcs.eval.run_layout import RunEvalLayout, infer_val_key
 from srcs.utils.json_io import load_jsonl, read_json
 from srcs.utils.paths import ensure_dir
 from srcs.visualization.curriculum_run_inlet import render_inlet_theory_for_run
+from srcs.visualization.progressive_pnn_diagram import render_pnn_diagram_for_run
 from srcs.visualization.eval_figures_config import (
   EvalFiguresSpec,
   eval_figures_spec_from_mapping,
@@ -644,6 +646,13 @@ def run_eval_figures_spec(spec: EvalFiguresSpec) -> list[Path]:
   )
   paths.extend(
     render_inlet_theory_for_run(
+      spec.layout,
+      spec.out_dir,
+      spec.allowed_stages,
+    )
+  )
+  paths.extend(
+    render_pnn_diagram_for_run(
       spec.layout,
       spec.out_dir,
       spec.allowed_stages,

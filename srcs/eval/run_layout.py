@@ -73,6 +73,8 @@ def infer_data_root(run_dir: Path) -> Path:
 
 def infer_val_key(rows: list[dict]) -> str:
   """Validation column on the training curve. Falls back to mean_val_mse."""
+  if any("weighted_val_mse" in r for r in rows):
+    return "weighted_val_mse"
   if any("mean_val_mse" in r for r in rows):
     return "mean_val_mse"
   if any("val_loss" in r for r in rows):

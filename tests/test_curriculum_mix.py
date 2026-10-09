@@ -40,6 +40,7 @@ def _knobs(**over: float) -> AdaptiveInletKnobs:
     stagnation_patience=0,
     stagnation_chunk=0.02,
     terminal_frac_tol=0.02,
+    min_epochs_per_stage=0,
   )
   base.update(over)
   return AdaptiveInletKnobs(**base)
@@ -65,6 +66,31 @@ def test_step_inlet_first_drop_unlocks_stage_one() -> None:
   assert out.inlet_chunk > 0.0
   assert 1 in out.fractions
   assert math.isclose(sum(out.fractions.values()), 1.0)
+
+
+def test_min_epochs_blocks_active_max_raise() -> None:
+  fr = {0: 1.0}
+  knobs = _knobs(min_epochs_per_stage=5)
+  out = step_adaptive_inlet_fractions(
+    fr,
+    0,
+    3,
+    0.1,
+    knobs,
+    epochs_at_active_max=2,
+  )
+  assert out.active_max_stage == 0
+  assert out.inlet_chunk > 0.0
+  out_ok = step_adaptive_inlet_fractions(
+    fr,
+    0,
+    3,
+    0.1,
+    knobs,
+    epochs_at_active_max=5,
+  )
+  assert out_ok.active_max_stage >= 1
+  assert 1 in out_ok.fractions
 
 
 def test_maybe_raise_active_max() -> None:

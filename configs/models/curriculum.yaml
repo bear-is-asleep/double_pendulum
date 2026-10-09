@@ -10,6 +10,9 @@ mix_unlock_fraction: 0.15 #
 
 passed_stage_min_fraction: 0.05
 
+# Full epochs at current active_max before active_max_stage may increase (0 = off).
+mix_min_epochs_per_stage: 5
+
 # Flat wval: force inlet after patience epochs (chunk not capped by mix_inlet_max_chunk).
 mix_stagnation_wval_band: 1.0e-2
 mix_stagnation_patience: 3

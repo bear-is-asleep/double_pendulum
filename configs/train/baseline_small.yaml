@@ -8,3 +8,4 @@ stages: [0, 1, 2, 3]
 train:
   model: baseline
   device: null
+  # resume_checkpoint: runs/baseline_small_s0123/baseline_w512_d2_k4/checkpoints/last.pt

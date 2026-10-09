@@ -16,6 +16,7 @@ from srcs.model.checkpoint import (
   resolve_checkpoint_file,
 )
 from srcs.model.mlp import build_mlp
+from srcs.model.progressive_net import build_progressive_net
 from srcs.loader import load_model_config
 from srcs.train.run_dir import init_run_dir, save_checkpoint
 def test_build_pointwise_inputs_shape() -> None:
@@ -57,3 +58,33 @@ def test_checkpoint_round_trip(tmp_path: Path) -> None:
   out = predict_at_times(loaded, t, row)
   assert out.shape == (3, 6)
   assert np.all(np.isfinite(out))
+
+
+def test_progressive_checkpoint_predict_needs_column(tmp_path: Path) -> None:
+  cfg = load_model_config("progressive")
+  cfg["hidden_width"] = 12
+  cfg["hidden_depth"] = 1
+  cfg["n_columns"] = 2
+  run_dir = init_run_dir(tmp_path, "pnn_ckpt", cfg)
+  model = build_progressive_net(cfg)
+  opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+  ckpt_path = run_dir / "checkpoints" / "best.pt"
+  ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+  save_checkpoint(
+    ckpt_path,
+    model=model,
+    optimizer=opt,
+    epoch=1,
+    global_step=1,
+    val_metric=0.1,
+    cfg=cfg,
+  )
+  loaded, meta, _ = load_model_from_checkpoint(ckpt_path)
+  assert meta["config"]["model_type"] == "progressive_pnn"
+  t = np.array([0.0, 0.05])
+  row = np.zeros(8, dtype=np.float64)
+  row[7] = 9.8
+  with pytest.raises(TypeError, match="column_index"):
+    predict_at_times(loaded, t, row)
+  out = predict_at_times(loaded, t, row, column_index=1)
+  assert out.shape == (2, 6)

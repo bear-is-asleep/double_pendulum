@@ -154,6 +154,7 @@ def merge_model_train_cfg(
   """Merge ``train_job['train']`` onto ``configs/models/<model_name>.yaml``."""
   train = dict(train_job["train"])
   train.pop("model", None)
+  train.pop("resume_checkpoint", None)
   device = train.pop("device", None)
   if device is not None and not isinstance(device, str):
     device = None
@@ -178,6 +179,11 @@ def load_model_config(
   base = read_mapping(root / "base.yaml")
   if model_name == "baseline":
     merged = dict(base)
+  elif model_name == "progressive":
+    # Inlet scheduler knobs live in curriculum.yaml; progressive adds PNN-only keys.
+    curriculum = read_mapping(root / "curriculum.yaml")
+    overlay = read_mapping(root / "progressive.yaml")
+    merged = {**base, **curriculum, **overlay}
   else:
     overlay = read_mapping(root / f"{model_name}.yaml")
     merged = {**base, **overlay}

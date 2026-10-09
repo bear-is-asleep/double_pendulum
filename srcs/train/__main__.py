@@ -6,6 +6,7 @@ Examples::
   python -m srcs.simulation.generate_data small
   python -m srcs.train --config small --force
   python -m srcs.train --config full --model curriculum --force
+  python -m srcs.train --config small --resume-checkpoint runs/.../checkpoints/last.pt
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from srcs.loader import list_configs
 from srcs.train.base import prepare_run_dir, require_stage_pools
 from srcs.train.job import resolve_train_job
 from srcs.train.registry import list_train_model_names, trainer_for_model
-from srcs.utils.run_logging import attach_training_terminal_log
 from srcs.utils.yaml_io import print_mapping_yaml
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
     help="Epoch cap (per stage for curriculum)",
   )
   p.add_argument("--seed", type=int, default=None, help="Train / dataloader seed")
+  p.add_argument(
+    "--resume-checkpoint",
+    type=Path,
+    default=None,
+    help="Continue training in the checkpoint run dir (overrides train.resume_checkpoint)",
+  )
   return p
 
 
@@ -76,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
       stages_text=args.stages,
       seed=args.seed,
       max_epochs=args.max_epochs,
+      resume_checkpoint=args.resume_checkpoint,
     )
   except ValueError as exc:
     logger.error("%s", exc)
@@ -84,10 +91,11 @@ def main(argv: list[str] | None = None) -> int:
   device = args.device if args.device is not None else job.device
 
   try:
+    if job.resume_checkpoint is not None and args.force:
+      raise FileExistsError("cannot use --force when resuming from a checkpoint")
     require_stage_pools(job.data_root, job.stages)
-    prepare_run_dir(job.runs_root, job.run_id, args.force)
-    run_dir = job.runs_root / job.run_id
-    attach_training_terminal_log(run_dir)
+    if job.resume_checkpoint is None:
+      prepare_run_dir(job.runs_root, job.run_id, args.force)
     print_mapping_yaml(
       "training parameters",
       {
@@ -99,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         "stages": job.stages,
         "device": device,
         "max_epochs": job.max_epochs,
+        "resume_checkpoint": str(job.resume_checkpoint) if job.resume_checkpoint else None,
         "train": job.cfg,
       },
     )
@@ -110,8 +119,9 @@ def main(argv: list[str] | None = None) -> int:
       run_id=job.run_id,
       device_name=device,
       max_epochs=args.max_epochs,
+      resume_from=job.resume_checkpoint,
     )
-  except (FileExistsError, FileNotFoundError, KeyError) as exc:
+  except (FileExistsError, FileNotFoundError, KeyError, ValueError) as exc:
     logger.error("%s", exc)
     return 1
 

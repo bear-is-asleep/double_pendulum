@@ -8,7 +8,11 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
-from srcs.model.checkpoint import load_model_from_checkpoint, predict_at_times
+from srcs.model.checkpoint import (
+  inference_column_index,
+  load_model_from_checkpoint,
+  predict_at_times,
+)
 from srcs.model.targets import decode_pred_row
 from srcs.physics.core import PendulumParams, PendulumState, cartesian, kinetic_energy, potential_energy
 from srcs.simulation.data import TrajectoryView
@@ -106,11 +110,14 @@ class SurrogateSource:
       return self._pred
     self.load()
     assert self._model is not None
+    cfg = self._meta.get("config") or {}
+    stage = int(cache_key[0]) if cache_key else 0
     pred = predict_at_times(
       self._model,
       np.asarray(view.t, dtype=np.float64),
       view.params,
       device=self.device,
+      column_index=inference_column_index(cfg, stage),
     )
     self._pred = pred
     self._pred_cache_key = cache_key

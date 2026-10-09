@@ -1,4 +1,4 @@
-"""Curriculum strategy: adaptive inlet smoke."""
+"""Progressive PNN trainer integration smoke."""
 
 from __future__ import annotations
 
@@ -9,11 +9,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
 from srcs.loader import load_model_config, load_sampler_config, sampler_val_fraction
+from srcs.model.checkpoint import load_model_from_checkpoint, predict_at_times
+from srcs.model.progressive_net import ProgressiveNet
 from srcs.simulation.data import build_pool, carve_validation, pool_path, save_pool
 from srcs.train.base import clears_pass_bar
-from srcs.train.curriculum import CurriculumTrainer
+from srcs.train.progressive_pnn import ProgressivePnnTrainer
 from srcs.utils.run_logging import close_run_log
 
 
@@ -65,8 +68,8 @@ def _write_tiny_stage_pools(
     save_pool(pool_path(data_root, stage, "val"), val, overwrite_frozen=True)
 
 
-def test_curriculum_trial_writes_run_dir(tmp_path: Path) -> None:
-  cfg = load_model_config("curriculum")
+def test_progressive_trial_writes_metrics(tmp_path: Path) -> None:
+  cfg = load_model_config("progressive")
   sampler = _tiny_sampler_cfg()
   data_root = tmp_path / "data"
   _write_tiny_stage_pools(
@@ -80,39 +83,41 @@ def test_curriculum_trial_writes_run_dir(tmp_path: Path) -> None:
   trial["hidden_width"] = 24
   trial["hidden_depth"] = 1
   trial["subsample_stride_k"] = 2
-  trial["max_epochs"] = 4
-  trial["early_stop_patience"] = 10
+  trial["max_epochs"] = 6
+  trial["early_stop_patience"] = 20
   trial["batch_size"] = 32
   trial["stage_pass_mse"] = 1e9
+  trial["mix_unlock_fraction"] = 0.5
+  trial["mix_inlet_gain"] = 3.0
 
   runs_root = tmp_path / "runs"
-  res = CurriculumTrainer().train_trial(
+  res = ProgressivePnnTrainer().train_trial(
     trial,
     data_root=data_root,
     stages=[0, 1],
     runs_root=runs_root,
-    run_id="curriculum_w24_d1_k2_seed0_smoke",
+    run_id="progressive_w24_d1_k2_seed0_smoke",
     device_name="cpu",
   )
   assert res.run_dir.is_dir()
-  assert (res.run_dir / "metrics.jsonl").exists()
   summary = json.loads((res.run_dir / "summary.json").read_text(encoding="utf-8"))
-  assert summary["experiment"] == "curriculum"
-  assert summary["strategy"] == "curriculum"
-  assert "mix_inlet_gain" in summary
-  assert all(np.isfinite(row.mse) for row in res.stage_val)
+  assert summary["experiment"] == "progressive"
+  assert summary["strategy"] == "progressive"
+  assert summary["n_columns"] >= 1
+  assert summary["n_params_total"] >= summary["n_params_trainable"]
   assert clears_pass_bar(list(res.stage_val), {0: 1e9, 1: 1e9})
 
   lines = (res.run_dir / "metrics.jsonl").read_text(encoding="utf-8").strip().split("\n")
   records = [json.loads(line) for line in lines if line]
-  assert len(records) >= 1
-  for row in records:
-    fr = row["train_stage_fraction"]
-    assert math.isclose(sum(float(v) for v in fr.values()), 1.0, rel_tol=1e-5)
-    assert "mix_weighted_val_mse" in row
-    assert "active_max_stage" in row
-    assert "mix_val_delta" in row
-    assert "mix_inlet_reason" in row
-    assert "mix_stagnation_epochs" in row
-    assert "mix_inlet_terminal" in row
-    assert "mix_stagnation_flat_at_fire" in row
+  assert any("n_columns" in row for row in records)
+  max_cols = max(int(row.get("n_columns", 1)) for row in records)
+  if max_cols >= 2:
+    assert any(row.get("optimizer_reset") for row in records)
+
+  ckpt = res.run_dir / "checkpoints" / "best.pt"
+  model, meta, _ = load_model_from_checkpoint(ckpt, device="cpu")
+  assert isinstance(model, ProgressiveNet)
+  row = np.zeros(8, dtype=np.float64)
+  row[7] = 9.8
+  out = predict_at_times(model, np.array([0.0]), row, column_index=0)
+  assert out.shape == (1, 6)

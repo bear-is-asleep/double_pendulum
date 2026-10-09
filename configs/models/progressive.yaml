@@ -1,7 +1,11 @@
 name: progressive_ann
 strategy: progressive
+model_type: progressive_pnn
 
-# Grow depth only; width stays at locked baseline hidden_width
-depth_start: 1
-# Epoch fractions in [0, 1] when depth increases toward hidden_depth
-depth_grow_fracs: [0.33, 0.66]
+use_lateral: true
+
+# Per-column hidden width policy (baseline spec in base.yaml):
+#   stages - divide by len(train job stages)
+#   match_baseline_params - search widths so full PNN n_params ~ baseline MLP
+#   int >= 2 - fixed divisor; off / 1 - full baseline width per column
+pnn_column_width_divisor: match_baseline_params

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import shutil
 import time
 from abc import ABC, abstractmethod
@@ -18,13 +19,20 @@ from torch.utils.data import DataLoader
 
 from srcs.loader import load_model_config
 from srcs.model.train_data import (
+  BASELINE_STAGE_MIX_EQUAL,
+  baseline_stage_mix_fractions,
   concat_xy,
-  fractions_from_stage_row_counts,
   load_stage_split_xy,
   make_loader,
+  make_weighted_stage_loader,
+  resolve_baseline_stage_mix,
   subsampled_points_per_trajectory,
 )
-from srcs.train.curriculum_mix import fraction_dict_for_log
+from srcs.train.curriculum_mix import (
+  fraction_dict_for_log,
+  stage_mses_from_val_rows,
+  weighted_mean_stage_mse,
+)
 from srcs.simulation.data import open_pool, pool_path
 from srcs.train.epoch import (
   BestCheckpointTracker,
@@ -43,15 +51,89 @@ from srcs.train.run_dir import (
   utc_now_iso,
   write_summary,
 )
+from srcs.train.summary_fields import strategy_summary_fields
+from srcs.utils.paths import load_run_config, resolve_checkpoint_file, resolve_run_dir
 from srcs.utils.run_logging import attach_training_terminal_log
 
 logger = logging.getLogger(__name__)
+
+_CHECKPOINT_CFG_KEYS = (
+  "model_type",
+  "hidden_width",
+  "hidden_depth",
+  "input_dim",
+  "output_dim",
+  "n_columns",
+)
+
+
+def assert_checkpoint_cfg_compatible(
+  saved_cfg: dict[str, Any],
+  job_cfg: dict[str, Any],
+) -> None:
+  for key in _CHECKPOINT_CFG_KEYS:
+    if key not in saved_cfg and key not in job_cfg:
+      continue
+    if saved_cfg.get(key) != job_cfg.get(key):
+      raise ValueError(
+        f"resume checkpoint config mismatch on {key!r}: "
+        f"checkpoint={saved_cfg.get(key)!r} job={job_cfg.get(key)!r}"
+      )
+
+
+def pack_checkpoint_resume_state(
+  tracker: BestCheckpointTracker,
+  *,
+  inlet_state: Any = None,
+  column_unlock_epoch: dict[int, int] | None = None,
+) -> dict[str, Any]:
+  state: dict[str, Any] = {
+    "tracker": {
+      "best_mean": float(tracker.best_mean),
+      "stale_epochs": int(tracker.stale_epochs),
+    },
+  }
+  if inlet_state is not None:
+    from srcs.train.curriculum_inlet_loop import pack_inlet_state
+
+    state["inlet"] = pack_inlet_state(inlet_state)
+  if column_unlock_epoch is not None:
+    state["column_unlock_epoch"] = {str(k): int(v) for k, v in column_unlock_epoch.items()}
+  return state
+
+
+@dataclass
+class TrialRun:
+  """Model, optimizer, and run paths for one training trial (fresh or resumed)."""
+
+  run_dir: Path
+  run_id: str
+  model: nn.Module
+  optimizer: optim.Optimizer
+  tracker: BestCheckpointTracker
+  ckpt_dir: Path
+  epochs_done: int
+  global_step: int
+  saved_resume_state: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class StageValLoss:
   stage: int
   mse: float
+
+
+StageValFn = Callable[
+  [
+    nn.Module,
+    Path | str,
+    list[int],
+    dict[str, Any],
+    torch.device,
+    LossWeights,
+  ],
+  list[StageValLoss],
+]
 
 
 @dataclass(frozen=True)
@@ -97,17 +179,43 @@ def per_stage_val_losses(
   cfg: dict[str, Any],
   device: torch.device,
   weights: LossWeights,
+  *,
+  split: str = "val",
+  stage_ready: Callable[[nn.Module, int], bool] | None = None,
+  stage_predict: Callable[[nn.Module, torch.Tensor, int], torch.Tensor] | None = None,
 ) -> list[StageValLoss]:
+  """
+  Per-stage surrogate MSE on a pool split (default ``val``).
+
+  Default forward: ``model(x)``. Pass ``stage_predict`` for PNN ``column_index=stage``.
+  """
+  from srcs.train.epoch import eval_numpy_xy_mse
+
   k = int(cfg["subsample_stride_k"])
   bs = int(cfg["batch_size"])
   out: list[StageValLoss] = []
   for stage in stages:
-    x, y = load_stage_split_xy(data_root, stage, "val", k)
+    if stage_ready is not None and not stage_ready(model, stage):
+      out.append(StageValLoss(stage=stage, mse=float("nan")))
+      continue
+    x, y = load_stage_split_xy(data_root, stage, split, k)
     if x.shape[0] == 0:
       out.append(StageValLoss(stage=stage, mse=float("nan")))
       continue
-    loader = make_loader(x, y, batch_size=bs, shuffle=False, seed=int(cfg["seed"]))
-    mse = eval_loader_mse(model, loader, device, weights)
+    if stage_predict is None:
+      loader = make_loader(x, y, batch_size=bs, shuffle=False, seed=int(cfg["seed"]))
+      mse = eval_loader_mse(model, loader, device, weights)
+    else:
+      stage_i = int(stage)
+      mse = eval_numpy_xy_mse(
+        model,
+        x,
+        y,
+        device,
+        weights,
+        bs,
+        lambda xb, m=model, s=stage_i: stage_predict(m, xb, s),
+      )
     out.append(StageValLoss(stage=stage, mse=mse))
   return out
 
@@ -127,13 +235,16 @@ def log_epoch_metrics(
   stale_epochs: int,
   stage_val: list[StageValLoss],
   epoch_seconds: float,
+  weighted_val: float | None = None,
 ) -> None:
+  wval = weighted_val if weighted_val is not None else mean_val
   logger.info(
-    "epoch %s/%s train=%.6f val_mse=%.6f best=%.6f stale=%s %s (%.1fs)",
+    "epoch %s/%s train=%.6f val_mse=%.6f wval=%.6f best=%.6f stale=%s %s (%.1fs)",
     epoch,
     epochs_cap,
     train_loss,
     mean_val,
+    wval,
     best_val,
     stale_epochs,
     format_stage_val_line(stage_val),
@@ -157,6 +268,7 @@ def persist_epoch_artifacts(
   metrics_extra: dict[str, Any] | None = None,
   epoch_seconds: float | None = None,
   train_steps: int | None = None,
+  resume_state: dict[str, Any] | None = None,
 ) -> None:
   """Write metrics.jsonl row, last.pt, and best.pt when val improves."""
   record: dict[str, Any] = {
@@ -182,6 +294,7 @@ def persist_epoch_artifacts(
     global_step=global_step,
     val_metric=mean_val,
     cfg=cfg,
+    resume_state=resume_state,
   )
   save_best_if_improved(
     tracker,
@@ -193,6 +306,7 @@ def persist_epoch_artifacts(
     global_step=global_step,
     cfg=cfg,
     save_fn=save_checkpoint,
+    resume_state=resume_state,
   )
 
 
@@ -213,6 +327,7 @@ def finish_logged_epoch(
   stage_val: list[StageValLoss],
   metrics_extra: dict[str, Any] | None = None,
   train_steps: int | None = None,
+  resume_state: dict[str, Any] | None = None,
 ) -> float:
   """One wall-clock sample: write metrics.jsonl once, then log it."""
   epoch_seconds = time.perf_counter() - epoch_t0
@@ -231,9 +346,44 @@ def finish_logged_epoch(
     metrics_extra=metrics_extra,
     epoch_seconds=epoch_seconds,
     train_steps=train_steps,
+    resume_state=resume_state,
   )
   log_fn(epoch_seconds)
   return epoch_seconds
+
+
+def baseline_epoch_losses(
+  metrics: EpochMetrics,
+  *,
+  model: nn.Module,
+  mix_mode: str,
+  mix_fractions: dict[int, float],
+  data_root: Path | str,
+  stages: list[int],
+  cfg: dict[str, Any],
+  device: torch.device,
+  weights: LossWeights,
+) -> tuple[float, float]:
+  """Train loss and val MSE using the same stage mix weights as training."""
+  stage_val_mses = stage_mses_from_val_rows(metrics.stage_val)
+  weighted_val = weighted_mean_stage_mse(stage_val_mses, mix_fractions)
+  if mix_mode == BASELINE_STAGE_MIX_EQUAL:
+    stage_train = per_stage_val_losses(
+      model,
+      data_root,
+      stages,
+      cfg,
+      device,
+      weights,
+      split="train",
+    )
+    train_loss = weighted_mean_stage_mse(
+      stage_mses_from_val_rows(stage_train),
+      mix_fractions,
+    )
+  else:
+    train_loss = metrics.train_loss
+  return train_loss, weighted_val
 
 
 def train_eval_epoch(
@@ -278,17 +428,21 @@ def complete_trial(
   k: int,
   pass_mse: float | Mapping[int, float],
   summary_extra: dict[str, Any] | None = None,
+  per_stage_val_fn: StageValFn | None = None,
 ) -> MixedPoolTrialResult:
   """Restore best weights, write summary.json, return trial result."""
   tracker.restore_best(model)
-  final_stage_val = per_stage_val_losses(
-    model, data_root, stages, cfg, device, weights
-  )
+  val_fn = per_stage_val_fn or per_stage_val_losses
+  final_stage_val = val_fn(model, data_root, stages, cfg, device, weights)
   final_mean = mean_finite_mse(final_stage_val)
   passes = clears_pass_bar(
     final_stage_val,
     resolve_pass_thresholds(pass_mse, final_stage_val),
   )
+  if "_n_params_trainable" not in cfg:
+    cfg["_n_params_trainable"] = n_params
+  if "_n_params_total" not in cfg:
+    cfg["_n_params_total"] = n_params
   summary = trainer.trial_summary(
     rid=rid,
     cfg=cfg,
@@ -300,9 +454,8 @@ def complete_trial(
     global_step=global_step,
     k=k,
     data_root=data_root,
+    run_outcome=summary_extra,
   )
-  if summary_extra:
-    summary.update(summary_extra)
   write_summary(run_dir, summary)
   return MixedPoolTrialResult(
     run_id=rid,
@@ -361,6 +514,125 @@ class StrategyTrainer(ABC):
   def experiment_name(self) -> str:
     ...
 
+  def make_optimizer(self, model: nn.Module, cfg: dict[str, Any]) -> optim.Optimizer:
+    return optim.Adam(model.parameters(), lr=float(cfg["lr"]))
+
+  def setup_trial(
+    self,
+    cfg: dict[str, Any],
+    *,
+    runs_root: Path | str,
+    run_id: str,
+    device: torch.device,
+    max_epochs: int | None,
+    resume_from: Path | None,
+  ) -> tuple[TrialRun, int]:
+    """Create or resume a run dir, load weights, tee ``train.log``."""
+    epochs_cap = int(max_epochs if max_epochs is not None else cfg["max_epochs"])
+    if resume_from is None:
+      run_dir = init_run_dir(runs_root, run_id, cfg)
+      model = self.build_model(cfg).to(device)
+      trial = TrialRun(
+        run_dir=run_dir,
+        run_id=run_id,
+        model=model,
+        optimizer=self.make_optimizer(model, cfg),
+        tracker=BestCheckpointTracker(),
+        ckpt_dir=run_dir / "checkpoints",
+        epochs_done=0,
+        global_step=0,
+      )
+    else:
+      trial = self._trial_from_checkpoint(resume_from, cfg, device)
+    attach_training_terminal_log(trial.run_dir)
+    if resume_from is not None:
+      done = trial.epochs_done
+      if done >= epochs_cap:
+        logger.info(
+          "resume epoch %s already at max_epochs %s; skipping training loop",
+          done,
+          epochs_cap,
+        )
+      else:
+        logger.info(
+          "resume training from epoch %s (next=%s) through %s",
+          done,
+          done + 1,
+          epochs_cap,
+        )
+    return trial, epochs_cap
+
+  def _trial_from_checkpoint(
+    self,
+    checkpoint_path: Path | str,
+    cfg: dict[str, Any],
+    device: torch.device,
+  ) -> TrialRun:
+    ckpt_path = resolve_checkpoint_file(checkpoint_path)
+    run_dir = resolve_run_dir(ckpt_path).resolve()
+    if not (run_dir / "config.yaml").is_file():
+      raise FileNotFoundError(f"resume run missing config.yaml: {run_dir}")
+    raw = torch.load(ckpt_path, map_location=device, weights_only=True)
+    if not isinstance(raw, dict) or "model_state_dict" not in raw:
+      raise KeyError(f"{ckpt_path}: expected dict with model_state_dict")
+    saved_cfg = load_run_config(run_dir, raw.get("config"))
+    assert_checkpoint_cfg_compatible(saved_cfg, cfg)
+    saved_resume = raw.get("resume_state")
+    if saved_resume is not None and not isinstance(saved_resume, dict):
+      saved_resume = None
+
+    model = self.build_model(cfg).to(device)
+    model.load_state_dict(raw["model_state_dict"])
+    model.train()
+
+    optimizer = self.make_optimizer(model, cfg)
+    opt_state = raw.get("optimizer_state_dict")
+    if opt_state is not None:
+      optimizer.load_state_dict(opt_state)
+    else:
+      logger.warning("checkpoint missing optimizer state; starting fresh optimizer")
+
+    ckpt_dir = run_dir / "checkpoints"
+    tracker = BestCheckpointTracker()
+    best_path = ckpt_dir / "best.pt"
+    best_state: dict[str, Any] | None = None
+    best_val: float | None = None
+    if best_path.is_file():
+      best_raw = torch.load(best_path, map_location=device, weights_only=True)
+      if isinstance(best_raw, dict):
+        sd = best_raw.get("model_state_dict")
+        if isinstance(sd, dict):
+          best_state = sd
+        if best_raw.get("val_metric") is not None:
+          best_val = float(best_raw["val_metric"])
+    tracker_data = (
+      saved_resume.get("tracker") if isinstance(saved_resume, dict) else None
+    )
+    if isinstance(tracker_data, dict):
+      tracker.best_mean = float(tracker_data.get("best_mean", tracker.best_mean))
+      tracker.stale_epochs = int(tracker_data.get("stale_epochs", 0))
+    else:
+      fallback = best_val if best_val is not None else raw.get("val_metric")
+      if fallback is not None and math.isfinite(float(fallback)):
+        tracker.best_mean = float(fallback)
+    if best_state is not None:
+      tracker.best_state = {
+        k: (v.detach().cpu().clone() if torch.is_tensor(v) else v)
+        for k, v in best_state.items()
+      }
+
+    return TrialRun(
+      run_dir=run_dir,
+      run_id=run_dir.name,
+      model=model,
+      optimizer=optimizer,
+      tracker=tracker,
+      ckpt_dir=ckpt_dir,
+      epochs_done=int(raw.get("epoch", 0)),
+      global_step=int(raw.get("global_step", 0)),
+      saved_resume_state=saved_resume,
+    )
+
   def trial_summary(
     self,
     *,
@@ -374,7 +646,9 @@ class StrategyTrainer(ABC):
     global_step: int,
     k: int,
     data_root: Path | str,
+    run_outcome: dict[str, Any] | None = None,
   ) -> dict[str, Any]:
+    """Build ``summary.json`` payload (core metrics + unified strategy fields)."""
     mean_val = mean_finite_mse(stage_val)
     pptr = subsampled_points_per_trajectory(
       open_pool(data_root, int(stages[0]), "train"),
@@ -399,12 +673,15 @@ class StrategyTrainer(ABC):
       "stages": stages,
       "seed": int(cfg["seed"]),
     }
-    summary.update(self.extra_summary_fields(cfg))
+    summary.update(
+      strategy_summary_fields(
+        cfg,
+        stages=stages,
+        n_params_trainable=n_params,
+        run_outcome=run_outcome,
+      )
+    )
     return summary
-
-  def extra_summary_fields(self, cfg: dict[str, Any]) -> dict[str, Any]:
-    """Architecture-specific keys for ``summary.json``."""
-    return {}
 
   @abstractmethod
   def train_trial(
@@ -417,12 +694,13 @@ class StrategyTrainer(ABC):
     run_id: str | None = None,
     device_name: str | None = None,
     max_epochs: int | None = None,
+    resume_from: Path | None = None,
   ) -> MixedPoolTrialResult:
     ...
 
 
 class MixedPoolTrainer(StrategyTrainer):
-  """Uniform mix of stage train pools; early stop on mean val MSE across stages."""
+  """Mixed stage train pools; early stop on unweighted mean val MSE across stages."""
 
   def train_trial(
     self,
@@ -434,39 +712,58 @@ class MixedPoolTrainer(StrategyTrainer):
     run_id: str | None = None,
     device_name: str | None = None,
     max_epochs: int | None = None,
+    resume_from: Path | None = None,
   ) -> MixedPoolTrialResult:
     device = pick_device(device_name)
     rid = run_id or baseline_run_id(cfg)
-    run_dir = init_run_dir(runs_root, rid, cfg)
-    attach_training_terminal_log(run_dir)
+    trial, epochs_cap = self.setup_trial(
+      cfg,
+      runs_root=runs_root,
+      run_id=rid,
+      device=device,
+      max_epochs=max_epochs,
+      resume_from=resume_from,
+    )
+    run_dir = trial.run_dir
+    rid = trial.run_id
+    model = trial.model
+    optimizer = trial.optimizer
+    tracker = trial.tracker
+    ckpt_dir = trial.ckpt_dir
+    global_step = trial.global_step
+    epochs_run = trial.epochs_done
     k = int(cfg["subsample_stride_k"])
     weights = loss_weights_from_cfg(cfg)
     pairs = [load_stage_split_xy(data_root, s, "train", k) for s in stages]
     row_counts = {stages[i]: int(pairs[i][0].shape[0]) for i in range(len(stages))}
-    # Log implicit shuffle mix (constant) so compare figures match curriculum metrics shape.
-    train_stage_fraction = fraction_dict_for_log(fractions_from_stage_row_counts(row_counts))
-    x_train, y_train = concat_xy(pairs)
-    train_loader = make_loader(
-      x_train,
-      y_train,
-      batch_size=int(cfg["batch_size"]),
-      shuffle=True,
-      seed=int(cfg["seed"]),
-    )
+    mix_mode = resolve_baseline_stage_mix(cfg)
+    mix_fractions = baseline_stage_mix_fractions(stages, row_counts, mix_mode)
+    train_stage_fraction = fraction_dict_for_log(mix_fractions)
+    stage_xy = {stages[i]: pairs[i] for i in range(len(stages))}
+    bs = int(cfg["batch_size"])
+    seed = int(cfg["seed"])
+    if mix_mode == BASELINE_STAGE_MIX_EQUAL:
+      train_loader = make_weighted_stage_loader(
+        stage_xy,
+        mix_fractions,
+        batch_size=bs,
+        seed=seed,
+      )
+    else:
+      x_train, y_train = concat_xy(pairs)
+      train_loader = make_loader(
+        x_train,
+        y_train,
+        batch_size=bs,
+        shuffle=True,
+        seed=seed,
+      )
 
-    model = self.build_model(cfg).to(device)
     n_params = self.count_parameters(model)
-    optimizer = optim.Adam(model.parameters(), lr=float(cfg["lr"]))
     patience = int(cfg["early_stop_patience"])
-    epochs_cap = int(max_epochs if max_epochs is not None else cfg["max_epochs"])
     pass_mse = float(cfg["stage_pass_mse"])
 
-    tracker = BestCheckpointTracker()
-    global_step = 0
-    epochs_run = 0
-    ckpt_dir = run_dir / "checkpoints"
-
-    for epoch in range(epochs_cap):
+    for epoch in range(epochs_run, epochs_cap):
       epoch_t0 = time.perf_counter()
       metrics = train_eval_epoch(
         model,
@@ -477,6 +774,17 @@ class MixedPoolTrainer(StrategyTrainer):
         data_root,
         stages,
         cfg,
+      )
+      train_loss, weighted_val = baseline_epoch_losses(
+        metrics,
+        model=model,
+        mix_mode=mix_mode,
+        mix_fractions=mix_fractions,
+        data_root=data_root,
+        stages=stages,
+        cfg=cfg,
+        device=device,
+        weights=weights,
       )
       epochs_run = epoch + 1
       global_step += metrics.steps
@@ -490,21 +798,27 @@ class MixedPoolTrainer(StrategyTrainer):
         cfg=cfg,
         epoch=epochs_run,
         global_step=global_step,
-        train_loss=metrics.train_loss,
+        train_loss=train_loss,
         mean_val=metrics.mean_val,
         stage_val=metrics.stage_val,
         log_fn=lambda secs: log_epoch_metrics(
           epoch=epochs_run,
           epochs_cap=epochs_cap,
-          train_loss=metrics.train_loss,
+          train_loss=train_loss,
           mean_val=metrics.mean_val,
           best_val=tracker.best_mean,
           stale_epochs=tracker.stale_epochs,
           stage_val=metrics.stage_val,
           epoch_seconds=secs,
+          weighted_val=weighted_val,
         ),
         train_steps=metrics.steps,
-        metrics_extra={"train_stage_fraction": train_stage_fraction},
+        metrics_extra={
+          "baseline_stage_mix": mix_mode,
+          "train_stage_fraction": train_stage_fraction,
+          "weighted_val_mse": weighted_val,
+        },
+        resume_state=pack_checkpoint_resume_state(tracker),
       )
 
       if tracker.should_stop(patience):
@@ -556,3 +870,5 @@ def prepare_run_dir(runs_root: Path, run_id: str, force: bool) -> None:
         f"run dir already exists: {run_dir} (pass --force to replace)"
       )
     shutil.rmtree(run_dir)
+
+

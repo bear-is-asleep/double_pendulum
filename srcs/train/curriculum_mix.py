@@ -25,6 +25,7 @@ class AdaptiveInletKnobs:
   stagnation_patience: int
   stagnation_chunk: float
   terminal_frac_tol: float
+  min_epochs_per_stage: int
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ _INLET_CFG_OPTIONAL_KEYS = (
   "mix_stagnation_patience",
   "mix_stagnation_chunk",
   "mix_inlet_terminal_frac_tol",
+  "mix_min_epochs_per_stage",
 )
 
 
@@ -74,6 +76,7 @@ def inlet_knobs_from_cfg(cfg: dict[str, Any]) -> AdaptiveInletKnobs:
     stagnation_patience=int(cfg.get("mix_stagnation_patience", 0)),
     stagnation_chunk=float(cfg.get("mix_stagnation_chunk", 0.02)),
     terminal_frac_tol=float(cfg.get("mix_inlet_terminal_frac_tol", 0.02)),
+    min_epochs_per_stage=int(cfg.get("mix_min_epochs_per_stage", 0)),
   )
 
 
@@ -284,6 +287,23 @@ def maybe_raise_active_max(
   return active_max
 
 
+def cap_active_max_raise(
+  active_max: int,
+  proposed: int,
+  last_stage: int,
+  knobs: AdaptiveInletKnobs,
+  epochs_at_active_max: int,
+) -> int:
+  """Block raising ``active_max_stage`` until min epoch dwell at current ceiling."""
+  if proposed <= active_max:
+    return proposed
+  if knobs.min_epochs_per_stage <= 0:
+    return min(proposed, last_stage)
+  if epochs_at_active_max < knobs.min_epochs_per_stage:
+    return active_max
+  return min(proposed, last_stage)
+
+
 def is_wval_flat(val_delta: float, band: float) -> bool:
   """True when epoch-to-epoch wval move is within ``band``."""
   return abs(float(val_delta)) <= float(band)
@@ -305,6 +325,8 @@ def blend_inlet_fractions(
   chunk: float,
   knobs: AdaptiveInletKnobs,
   wval_delta: float,
+  *,
+  epochs_at_active_max: int = 0,
 ) -> InletStepResult:
   """Blend mix toward exp template by ``chunk`` (not capped by ``max_chunk``)."""
   if not 0.0 < chunk <= 1.0:
@@ -319,6 +341,13 @@ def blend_inlet_fractions(
     last_stage,
     cur,
     knobs.unlock_fraction,
+  )
+  new_active = cap_active_max_raise(
+    active_max,
+    new_active,
+    last_stage,
+    knobs,
+    epochs_at_active_max,
   )
 
   template = exp_template_fractions(new_active, knobs.decay_lambda)
@@ -342,6 +371,8 @@ def step_adaptive_inlet_fractions(
   last_stage: int,
   wval_delta: float,
   knobs: AdaptiveInletKnobs,
+  *,
+  epochs_at_active_max: int = 0,
 ) -> InletStepResult:
   """
   On wval drop: blend toward exp template by chunk; else freeze fractions.
@@ -359,6 +390,7 @@ def step_adaptive_inlet_fractions(
     chunk,
     knobs,
     wval_delta,
+    epochs_at_active_max=epochs_at_active_max,
   )
 
 
@@ -368,6 +400,8 @@ def step_stagnation_inlet_fractions(
   last_stage: int,
   wval_delta: float,
   knobs: AdaptiveInletKnobs,
+  *,
+  epochs_at_active_max: int = 0,
 ) -> InletStepResult:
   """Force blend by ``stagnation_chunk`` (may exceed ``max_chunk``)."""
   return blend_inlet_fractions(
@@ -377,6 +411,7 @@ def step_stagnation_inlet_fractions(
     knobs.stagnation_chunk,
     knobs,
     wval_delta,
+    epochs_at_active_max=epochs_at_active_max,
   )
 
 
@@ -398,6 +433,7 @@ def decide_epoch_inlet(
   stagnation_epochs: int,
   *,
   has_prev_wval: bool,
+  epochs_at_active_max: int = 0,
 ) -> InletEpochOutcome:
   """
   Qualifying wval drop may blend adaptively; flat-band patience is independent.
@@ -416,6 +452,7 @@ def decide_epoch_inlet(
     last_stage,
     val_delta,
     knobs,
+    epochs_at_active_max=epochs_at_active_max,
   )
   if adaptive.inlet_chunk > 0.0:
     step = adaptive
@@ -445,6 +482,7 @@ def decide_epoch_inlet(
     last_stage,
     val_delta,
     knobs,
+    epochs_at_active_max=epochs_at_active_max,
   )
   return InletEpochOutcome(
     stim,
@@ -492,6 +530,9 @@ def validate_curriculum_cfg(cfg: dict[str, Any]) -> None:
   term_tol = float(cfg.get("mix_inlet_terminal_frac_tol", 0.02))
   if term_tol <= 0.0:
     raise ValueError(f"mix_inlet_terminal_frac_tol must be > 0, got {term_tol}")
+  min_ep = int(cfg.get("mix_min_epochs_per_stage", 0))
+  if min_ep < 0:
+    raise ValueError(f"mix_min_epochs_per_stage must be >= 0, got {min_ep}")
 
 
 def fraction_dict_for_log(fractions: Mapping[int, float]) -> dict[str, float]:

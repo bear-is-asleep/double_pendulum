@@ -14,9 +14,11 @@ from numpy.typing import NDArray
 from srcs.eval.channels import CHANNEL_KEYS, per_step_channel_abs_errors
 from srcs.eval.run_layout import RunEvalLayout, infer_data_root
 from srcs.model.checkpoint import (
+  inference_column_index,
   load_model_from_checkpoint,
   predict_at_times,
 )
+from srcs.model.progressive_net import pnn_stage_ready
 from srcs.model.targets import decode_pred_row
 from srcs.physics.core import PendulumParams, kinetic_energy, potential_energy
 from srcs.simulation.data import open_pool, pool_path
@@ -132,6 +134,15 @@ def evaluate_test_pools(
     if pool.n_traj == 0:
       logger.warning("skip stage %s: empty test pool", stage)
       continue
+    col_idx = inference_column_index(cfg, stage)
+    if col_idx is not None and not pnn_stage_ready(model, col_idx):
+      logger.warning(
+        "skip stage %s: checkpoint n_columns=%s (column %s not trained)",
+        stage,
+        getattr(model, "n_columns", "?"),
+        col_idx,
+      )
+      continue
     if t_ref is None:
       t_ref = np.asarray(pool.t, dtype=np.float64)
     elif pool.t.shape != t_ref.shape or not np.allclose(pool.t, t_ref):
@@ -142,7 +153,13 @@ def evaluate_test_pools(
     sum_mae = {k: np.zeros(pool.n_t, dtype=np.float64) for k in CHANNEL_KEYS}
     for i in range(pool.n_traj):
       view = pool.get_traj(i)
-      pred = predict_at_times(model, view.t, view.params, device=device)
+      pred = predict_at_times(
+        model,
+        view.t,
+        view.params,
+        device=device,
+        column_index=col_idx,
+      )
       target = _gt_target_matrix(view)
       sum_loss += weighted_loss_per_step(
         pred,

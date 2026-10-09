@@ -20,6 +20,16 @@ class TrainJob:
   stages: list[int]
   device: str | None
   max_epochs: int
+  resume_checkpoint: Path | None
+
+
+def _resolve_resume_checkpoint(raw: Any) -> Path | None:
+  if raw is None:
+    return None
+  text = str(raw).strip()
+  if not text:
+    return None
+  return Path(text).expanduser()
 
 
 def _model_name_from_yaml(
@@ -41,14 +51,18 @@ def _train_job_from_yaml(
   stages_text: str | None,
   seed: int | None,
   max_epochs: int | None,
+  resume_checkpoint: Path | None = None,
 ) -> TrainJob:
   train_job = load_train_config(name)
   model_name = _model_name_from_yaml(train_job, model)
+  train_section = dict(train_job.get("train", {}))
+  yaml_resume = _resolve_resume_checkpoint(train_section.get("resume_checkpoint"))
   cfg, yaml_device = merge_model_train_cfg(
     train_job,
     model_name=model_name,
     seed=seed,
   )
+  resolved_resume = resume_checkpoint if resume_checkpoint is not None else yaml_resume
   stages = (
     parse_stage_list(stages_text)
     if stages_text
@@ -65,6 +79,7 @@ def _train_job_from_yaml(
     stages=stages,
     device=yaml_device,
     max_epochs=epochs,
+    resume_checkpoint=resolved_resume,
   )
 
 
@@ -77,6 +92,7 @@ def _train_job_from_flags(
   stages_text: str,
   seed: int | None,
   max_epochs: int | None,
+  resume_checkpoint: Path | None = None,
 ) -> TrainJob:
   cfg = load_model_config(model_name)
   if seed is not None:
@@ -92,6 +108,7 @@ def _train_job_from_flags(
     stages=parse_stage_list(stages_text),
     device=None,
     max_epochs=epochs,
+    resume_checkpoint=resume_checkpoint,
   )
 
 
@@ -105,6 +122,7 @@ def resolve_train_job(
   stages_text: str | None,
   seed: int | None,
   max_epochs: int | None,
+  resume_checkpoint: Path | None = None,
 ) -> TrainJob:
   """Build a ``TrainJob`` from ``python -m srcs.train`` flags."""
   if config is not None:
@@ -117,6 +135,7 @@ def resolve_train_job(
       stages_text=stages_text,
       seed=seed,
       max_epochs=max_epochs,
+      resume_checkpoint=resume_checkpoint,
     )
   if data_root is None or runs_root is None:
     raise ValueError("--data-root and --runs-root required without --config")
@@ -133,4 +152,5 @@ def resolve_train_job(
     stages_text=stages_text,
     seed=seed,
     max_epochs=max_epochs,
+    resume_checkpoint=resume_checkpoint,
   )

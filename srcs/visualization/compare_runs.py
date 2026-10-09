@@ -220,7 +220,10 @@ def plot_compare_training(
         linewidths=0.4,
         zorder=5,
       )
-  ax.set_ylim(0.0, spec.train_ylim)
+  ax.relim()
+  ax.autoscale_view()
+  _, ymax = ax.get_ylim()
+  ax.set_ylim(0.0, ymax if ymax > 0 else spec.train_ylim)
   ax.set_xlabel("epoch")
   ax.set_ylabel("loss")
   ax.set_title("training curves (compare)")
